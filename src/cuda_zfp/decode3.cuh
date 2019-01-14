@@ -38,7 +38,9 @@ cudaDecode3(Word *blocks,
             const uint3 dims,
             const int3 stride,
             const uint3 padded_dims,
-            uint maxbits)
+            const int param,
+            const zfp_mode mode,
+            const uint chunk_size)
 {
   
   typedef unsigned long long int ull;
@@ -47,65 +49,79 @@ cudaDecode3(Word *blocks,
   const ull blockId = blockIdx.x +
                       blockIdx.y * gridDim.x +
                       gridDim.x * gridDim.y * blockIdx.z;
-  // each thread gets a block so the block index is 
-  // the global thread index
-  const ull block_idx = blockId * blockDim.x + threadIdx.x;
-  
-  const int total_blocks = (padded_dims.x * padded_dims.y * padded_dims.z) / 64; 
-  
-  if(block_idx >= total_blocks) 
-  {
-    return;
+  const ull thread_idx = blockId * blockDim.x + threadIdx.x;
+  const int total_blocks = (padded_dims.x * padded_dims.y * padded_dims.z) / 64;
+
+  ll bit_offset;
+  int bmax, block_idx;
+
+  switch(mode) {
+    case zfp_mode_fixed_rate:
+      block_idx = thread_idx;
+      bmax = MIN(thread_idx + 1, total_blocks);
+      bit_offset = param * thread_idx;
+      break;
+    case zfp_mode_fixed_accuracy:
+    case zfp_mode_fixed_precision:
+      /* TODO: Decide if bits per block in header is fixed or variable and how to pass it */
+      block_idx = thread_idx * chunk_size;
+      bmax = MIN(block_idx + chunk_size, total_blocks);
+      const int chunks = (total_blocks + chunk_size - 1) / chunk_size;
+      /* TODO: Separate header and data when transferring. Current implementation only works when the amount of bits per chunk is equal to the CUDA word size (64) */
+      bit_offset = (chunks * HEADER_BITS) + blocks[thread_idx];
+      break;
   }
 
-  BlockReader<BlockSize> reader(blocks, maxbits, block_idx, total_blocks);
- 
-  Scalar result[BlockSize];
-  memset(result, 0, sizeof(Scalar) * BlockSize);
+  BlockReader<BlockSize> reader(blocks, bit_offset);
 
-  zfp_decode<Scalar,BlockSize>(reader, result, maxbits);
-
-  // logical block dims
-  uint3 block_dims;
-  block_dims.x = padded_dims.x >> 2; 
-  block_dims.y = padded_dims.y >> 2; 
-  block_dims.z = padded_dims.z >> 2; 
-  // logical pos in 3d array
-  uint3 block;
-  block.x = (block_idx % block_dims.x) * 4; 
-  block.y = ((block_idx/ block_dims.x) % block_dims.y) * 4; 
-  block.z = (block_idx/ (block_dims.x * block_dims.y)) * 4; 
-  
-  // default strides
-  const ll offset = (ll)block.x * stride.x + (ll)block.y * stride.y + (ll)block.z * stride.z; 
-
-  bool partial = false;
-  if(block.x + 4 > dims.x) partial = true;
-  if(block.y + 4 > dims.y) partial = true;
-  if(block.z + 4 > dims.z) partial = true;
-  if(partial)
+  for (; block_idx < bmax; block_idx++)
   {
-    const uint nx = block.x + 4u > dims.x ? dims.x - block.x : 4;
-    const uint ny = block.y + 4u > dims.y ? dims.y - block.y : 4;
-    const uint nz = block.z + 4u > dims.z ? dims.z - block.z : 4;
+    Scalar result[BlockSize] = {0};
+    zfp_decode<Scalar,BlockSize>(reader, result, param, mode, 3);
 
-    scatter_partial3(result, out + offset, nx, ny, nz, stride.x, stride.y, stride.z);
-  }
-  else
-  {
-    scatter3(result, out + offset, stride.x, stride.y, stride.z);
+    // logical block dims
+    uint3 block_dims;
+    block_dims.x = padded_dims.x >> 2;
+    block_dims.y = padded_dims.y >> 2;
+    block_dims.z = padded_dims.z >> 2;
+    // logical pos in 3d array
+    uint3 block;
+    block.x = (block_idx % block_dims.x) * 4;
+    block.y = ((block_idx/ block_dims.x) % block_dims.y) * 4;
+    block.z = (block_idx/ (block_dims.x * block_dims.y)) * 4;
+
+    // default strides
+    const ll offset = (ll)block.x * stride.x + (ll)block.y * stride.y + (ll)block.z * stride.z;
+    bool partial = false;
+    if(block.x + 4 > dims.x) partial = true;
+    if(block.y + 4 > dims.y) partial = true;
+    if(block.z + 4 > dims.z) partial = true;
+    if(partial)
+    {
+      const uint nx = block.x + 4u > dims.x ? dims.x - block.x : 4;
+      const uint ny = block.y + 4u > dims.y ? dims.y - block.y : 4;
+      const uint nz = block.z + 4u > dims.z ? dims.z - block.z : 4;
+      scatter_partial3(result, out + offset, nx, ny, nz, stride.x, stride.y, stride.z);
+    }
+    else
+    {
+      scatter3(result, out + offset, stride.x, stride.y, stride.z);
+    }
   }
 }
+
 template<class Scalar>
-size_t decode3launch(uint3 dims, 
+size_t decode3launch(uint3 dims,
                      int3 stride,
                      Word *stream,
                      Scalar *d_data,
-                     uint maxbits)
+                     int param,
+                     zfp_mode mode,
+                     uint chunk_size)
 {
-  const int cuda_block_size = 128;
-  dim3 block_size;
-  block_size = dim3(cuda_block_size, 1, 1);
+  /* TODO: optimize block size, possibly based on array dimensions and mode */
+  int cuda_block_size;
+  size_t stream_bytes, total_blocks;
 
   uint3 zfp_pad(dims); 
   // ensure that we have block sizes
@@ -116,20 +132,24 @@ size_t decode3launch(uint3 dims,
 
   const int zfp_blocks = (zfp_pad.x * zfp_pad.y * zfp_pad.z) / 64; 
 
-  
-  //
-  // we need to ensure that we launch a multiple of the 
-  // cuda block size
-  //
-  int block_pad = 0; 
-  if(zfp_blocks % cuda_block_size != 0)
-  {
-    block_pad = cuda_block_size - zfp_blocks % cuda_block_size; 
+  switch(mode) {
+    case zfp_mode_fixed_rate:
+      cuda_block_size = 128;
+      stream_bytes = calc_device_mem3d(zfp_pad, param);
+      total_blocks = zfp_blocks;
+      if(zfp_blocks % cuda_block_size != 0)
+        total_blocks += (cuda_block_size - zfp_blocks % cuda_block_size);
+      break;
+    case zfp_mode_fixed_accuracy:
+    case zfp_mode_fixed_precision:
+      /* Round array to multiple of 4, chunks to multiple of cuda block size */
+      cuda_block_size = 64;
+      /* Set stream bytes to the actual size */
+      stream_bytes = 1;
+      total_blocks = (zfp_blocks + chunk_size - 1) / chunk_size;
+      break;
   }
-
-  size_t total_blocks = block_pad + zfp_blocks;
-  size_t stream_bytes = calc_device_mem3d(zfp_pad, maxbits);
-
+  dim3 block_size = dim3(cuda_block_size, 1, 1);
   dim3 grid_size = calculate_grid_size(total_blocks, cuda_block_size);
 
 #ifdef CUDA_ZFP_RATE_PRINT
@@ -137,22 +157,23 @@ size_t decode3launch(uint3 dims,
   cudaEvent_t start, stop;
   cudaEventCreate(&start);
   cudaEventCreate(&stop);
-
   cudaEventRecord(start);
 #endif
 
   cudaDecode3<Scalar, 64> << < grid_size, block_size >> >
     (stream,
-		 d_data,
+     d_data,
      dims,
      stride,
      zfp_pad,
-     maxbits);
+     param,
+     mode,
+     chunk_size);
 
 #ifdef CUDA_ZFP_RATE_PRINT
   cudaEventRecord(stop);
   cudaEventSynchronize(stop);
-	cudaStreamSynchronize(0);
+  cudaStreamSynchronize(0);
 
   float miliseconds = 0;
   cudaEventElapsedTime(&miliseconds, start, stop);
@@ -161,8 +182,9 @@ size_t decode3launch(uint3 dims,
   rate /= 1024.f;
   rate /= 1024.f;
   rate /= 1024.f;
-  printf("Decode elapsed time: %.5f (s)\n", seconds);
-  printf("# decode3 rate: %.2f (GB / sec) %d\n", rate, maxbits);
+  printf("%.2f",rate);
+//  printf("Decode elapsed time: %.5f (s)\n", seconds);
+//  printf("# decode3 rate: %.2f (GB / sec) %d\n", rate, param);
 #endif
 
   return stream_bytes;
@@ -173,9 +195,11 @@ size_t decode3(uint3 dims,
                int3 stride,
                Word  *stream,
                Scalar *d_data,
-               uint maxbits)
+               int param,
+               zfp_mode mode,
+               uint chunk_size)
 {
-	return decode3launch<Scalar>(dims, stride, stream, d_data, maxbits);
+	return decode3launch<Scalar>(dims, stride, stream, d_data, param, mode, chunk_size);
 }
 
 } // namespace cuZFP

@@ -567,6 +567,12 @@ zfp_stream_set_bit_stream(zfp_stream* zfp, bitstream* stream)
   zfp->stream = stream;
 }
 
+void
+zfp_stream_set_size(zfp_stream* zfp, size_t size)
+{
+  zfp->size = size;
+}
+
 double
 zfp_stream_set_rate(zfp_stream* zfp, double rate, zfp_type type, uint dims, int wra)
 {
@@ -714,6 +720,12 @@ zfp_stream_omp_chunk_size(const zfp_stream* zfp)
   return zfp->exec.params.omp.chunk_size;
 }
 
+uint
+zfp_stream_cuda_chunk_size(const zfp_stream* zfp)
+{
+  return zfp->exec.params.cuda.chunk_size;
+}
+
 int
 zfp_stream_set_execution(zfp_stream* zfp, zfp_exec_policy policy)
 {
@@ -756,6 +768,15 @@ zfp_stream_set_omp_chunk_size(zfp_stream* zfp, uint chunk_size)
   if (!zfp_stream_set_execution(zfp, zfp_exec_omp))
     return 0;
   zfp->exec.params.omp.chunk_size = chunk_size;
+  return 1;
+}
+
+int
+zfp_stream_set_cuda_chunk_size(zfp_stream* zfp, uint chunk_size)
+{
+  if (!zfp_stream_set_execution(zfp, zfp_exec_cuda))
+    return 0;
+  zfp->exec.params.cuda.chunk_size = chunk_size;
   return 1;
 }
 

@@ -112,7 +112,7 @@ usage()
   fprintf(stderr, "Execution parameters:\n");
   fprintf(stderr, "  -x serial : serial compression (default)\n");
   fprintf(stderr, "  -x omp[=threads[,chunk_size]] : OpenMP parallel compression\n");
-  fprintf(stderr, "  -x cuda : CUDA fixed rate parallel compression/decompression\n");
+  fprintf(stderr, "  -x cuda[=chunk_size] : CUDA parallel compression/decompression\n");
   fprintf(stderr, "Examples:\n");
   fprintf(stderr, "  -i file : read uncompressed file and compress to memory\n");
   fprintf(stderr, "  -z file : read compressed file and decompress to memory\n");
@@ -286,8 +286,13 @@ int main(int argc, char* argv[])
           threads = 0;
           chunk_size = 0;
         }
-        else if (!strcmp(argv[i], "cuda"))
+        else if (sscanf(argv[i], "cuda=%u", &chunk_size) == 1)
           exec = zfp_exec_cuda;
+        else if (!strcmp(argv[i], "cuda"))
+        {
+          exec = zfp_exec_cuda;
+          chunk_size = 0;
+        }
         else
           usage();
         break;
@@ -317,40 +322,22 @@ int main(int argc, char* argv[])
     return EXIT_FAILURE;
   }
 
-  /* make sure we (will) know scalar type */
-  if (!typesize) {
-    if (inpath) {
-      fprintf(stderr, "must specify scalar type via -f, -d, or -t to compress\n");
-      return EXIT_FAILURE;
-    }
-    else if (!header) {
-      fprintf(stderr, "must specify scalar type via -f, -d, or -t or header via -h to decompress\n");
-      return EXIT_FAILURE;
-    }
+  /* make sure we know floating-point type */
+  if ((inpath || !header) && !typesize) {
+    fprintf(stderr, "must specify scalar type via -f, -d, or -t or header via -h\n");
+    return EXIT_FAILURE;
   }
 
-  /* make sure we (will) know array dimensions */
-  if (!dims) {
-    if (inpath) {
-      fprintf(stderr, "must specify array dimensions via -1, -2, -3, or -4 to compress\n");
-      return EXIT_FAILURE;
-    }
-    else if (!header) {
-      fprintf(stderr, "must specify array dimensions via -1, -2, -3, or -4 or header via -h to decompress\n");
-      return EXIT_FAILURE;
-    }
+  /* make sure we know array dimensions */
+  if ((inpath || !header) && !dims) {
+    fprintf(stderr, "must specify array dimensions via -1, -2, or -3 or header via -h\n");
+    return EXIT_FAILURE;
   }
 
-  /* make sure we (will) know (de)compression mode and parameters */
-  if (!mode) {
-    if (inpath) {
-      fprintf(stderr, "must specify compression parameters via -a, -c, -p, or -r to compress\n");
-      return EXIT_FAILURE;
-    }
-    else if (!header) {
-      fprintf(stderr, "must specify compression parameters via -a, -c, -p, or -r or header via -h to decompress\n");
-      return EXIT_FAILURE;
-    }
+  /* make sure we know (de)compression mode and parameters */
+  if ((inpath || !header) && !mode) {
+    fprintf(stderr, "must specify compression parameters via -a, -c, -p, or -r or header via -h\n");
+    return EXIT_FAILURE;
   }
 
   /* make sure we have input file for stats */
@@ -411,6 +398,8 @@ int main(int argc, char* argv[])
       return EXIT_FAILURE;
     }
     fclose(file);
+    /* for CUDA decompression, store the size of the buffer in the zfp_stream */
+    zfp_stream_set_size(zfp, zfpsize);
 
     /* associate bit stream with buffer */
     stream = stream_open(buffer, bufsize);
@@ -467,7 +456,8 @@ int main(int argc, char* argv[])
   /* specify execution policy */
   switch (exec) {
       case zfp_exec_cuda:
-        if (!zfp_stream_set_execution(zfp, exec)) {
+        if (!zfp_stream_set_execution(zfp, exec) ||
+            !zfp_stream_set_cuda_chunk_size(zfp, chunk_size)) {
           fprintf(stderr, "cuda execution not available\n");
           return EXIT_FAILURE;
         }
@@ -498,6 +488,8 @@ int main(int argc, char* argv[])
       return EXIT_FAILURE;
     }
     buffer = malloc(bufsize);
+    /* for CUDA compression, store the maximum size of the buffer needed */
+    zfp_stream_set_size(zfp, bufsize);
     if (!buffer) {
       fprintf(stderr, "cannot allocate memory\n");
       return EXIT_FAILURE;

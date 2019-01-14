@@ -93,7 +93,6 @@ bool is_contigous(const uint dims[3], const int3 &stride, long long int &offset)
   {
     return is_contigous1d(dims[0], stride.x, offset);
   } 
-
 }
 //
 // encode expects device pointers
@@ -143,14 +142,13 @@ size_t encode(uint dims[3], int3 stride, int bits_per_block, T *d_data, Word *d_
   }
 
   errors.chk("Encode");
-  
+
   return stream_size; 
 }
 
 template<typename T>
-size_t decode(uint ndims[3], int3 stride, int bits_per_block, Word *stream, T *out)
+size_t decode(uint ndims[3], int3 stride, Word *stream, T *out, int param, zfp_mode mode, uint chunk_size)
 {
-
   int d = 0;
   size_t out_size = 1;
   size_t stream_bytes = 0;
@@ -173,7 +171,7 @@ size_t decode(uint ndims[3], int3 stride, int bits_per_block, Word *stream, T *o
     s.z = stride.z; 
 
     cuZFP::ConstantSetup::setup_3d();
-    stream_bytes = cuZFP::decode3<T>(dims, s, stream, out, bits_per_block); 
+    stream_bytes = cuZFP::decode3<T>(dims, s, stream, out, param, mode, chunk_size);
   }
   else if(d == 1)
   {
@@ -181,8 +179,7 @@ size_t decode(uint ndims[3], int3 stride, int bits_per_block, Word *stream, T *o
     int sx = stride.x;
 
     cuZFP::ConstantSetup::setup_1d();
-    stream_bytes = cuZFP::decode1<T>(dim, sx, stream, out, bits_per_block); 
-
+    stream_bytes = cuZFP::decode1<T>(dim, sx, stream, out, param, mode, chunk_size);
   }
   else if(d == 2)
   {
@@ -195,7 +192,7 @@ size_t decode(uint ndims[3], int3 stride, int bits_per_block, Word *stream, T *o
     s.y = stride.y; 
 
     cuZFP::ConstantSetup::setup_2d();
-    stream_bytes = cuZFP::decode2<T>(dims, s, stream, out, bits_per_block); 
+    stream_bytes = cuZFP::decode2<T>(dims, s, stream, out, param, mode, chunk_size);
   }
   else std::cerr<<" d ==  "<<d<<" not implemented\n";
  
@@ -213,10 +210,10 @@ Word *setup_device_stream(zfp_stream *stream,const zfp_field *field)
   } 
 
   Word *d_stream = NULL;
-  // TODO: we we have a real stream we can just ask it how big it is
-  size_t max_size = zfp_stream_maximum_size(stream, field);
-  cudaMalloc(&d_stream, max_size);
-  cudaMemcpy(d_stream, stream->stream->begin, max_size, cudaMemcpyHostToDevice);
+  /* read the size of the buffer from the zfp_stream struct */
+  size_t size = stream->size;
+  cudaMalloc(&d_stream, size);
+  cudaMemcpy(d_stream, stream->stream->begin, size, cudaMemcpyHostToDevice);
   return d_stream;
 }
 
@@ -374,7 +371,7 @@ cuda_decompress(zfp_stream *stream, zfp_field *field)
   dims[0] = field->nx;
   dims[1] = field->ny;
   dims[2] = field->nz;
-   
+
   int3 stride;  
   stride.x = field->sx ? field->sx : 1;
   stride.y = field->sy ? field->sy : field->nx;
@@ -383,7 +380,7 @@ cuda_decompress(zfp_stream *stream, zfp_field *field)
   size_t decoded_bytes = 0;
   long long int offset = 0;
   void *d_data = internal::setup_device_field(field, stride, offset);
-  
+
   if(d_data == NULL)
   {
     // null means the array is non-contiguous host mem which is not supported
@@ -391,29 +388,60 @@ cuda_decompress(zfp_stream *stream, zfp_field *field)
   }
 
   Word *d_stream = internal::setup_device_stream(stream, field);
+  zfp_mode mode = zfp_stream_compression_mode(stream);
+  uint chunk_size = zfp_stream_cuda_chunk_size(stream);
+
+  /* parameter needed to decode the bitstream differs per execution policy */
+  int param;
+  if(mode == zfp_mode_fixed_rate)
+  {
+    param = (int)stream->maxbits;
+  }
+  else if(mode == zfp_mode_fixed_accuracy)
+  {
+    param = (int)stream->minexp;
+    if (!chunk_size) {
+      fprintf(stderr, "chunk size not specified for CUDA fixed accuracy decompression\n");
+      exit(EXIT_FAILURE);
+    }
+  }
+  else if(mode == zfp_mode_fixed_precision)
+  {
+    param = (int)stream->maxprec;
+    if (!chunk_size) {
+      fprintf(stderr, "chunk size not specified for CUDA fixed precision decompression\n");
+      exit(EXIT_FAILURE);
+    }
+
+  }
+  else
+  {
+    printf("Custom execution is not supported in this CUDA release \n");
+    exit(EXIT_FAILURE);
+  }
 
   if(field->type == zfp_type_float)
   {
     float *data = (float*) d_data;
-    decoded_bytes = internal::decode(dims, stride, (int)stream->maxbits, d_stream, data);
+    decoded_bytes = internal::decode(dims, stride, d_stream, data, param, mode, chunk_size);
     d_data = (void*) data;
   }
   else if(field->type == zfp_type_double)
   {
     double *data = (double*) d_data;
-    decoded_bytes = internal::decode(dims, stride, (int)stream->maxbits, d_stream, data);
+    decoded_bytes = internal::decode(dims, stride, d_stream, data, param, mode, chunk_size);
     d_data = (void*) data;
   }
   else if(field->type == zfp_type_int32)
   {
     int *data = (int*) d_data;
-    decoded_bytes = internal::decode(dims, stride, (int)stream->maxbits, d_stream, data);
+    decoded_bytes = internal::decode(dims, stride, d_stream, data, param, mode, chunk_size);
     d_data = (void*) data;
   }
   else if(field->type == zfp_type_int64)
   {
     long long int *data = (long long int*) d_data;
-    decoded_bytes = internal::decode(dims, stride, (int)stream->maxbits, d_stream, data);
+    decoded_bytes = internal::decode(dims, stride, d_stream, data, param, mode, chunk_size);
     d_data = (void*) data;
   }
   else
@@ -421,7 +449,6 @@ cuda_decompress(zfp_stream *stream, zfp_field *field)
     std::cerr<<"Cannot decompress: type unknown\n";
   }
 
-   
   size_t type_size = zfp_type_size(field->type);
 
   size_t field_size = 1;
@@ -432,13 +459,23 @@ cuda_decompress(zfp_stream *stream, zfp_field *field)
       field_size *= dims[i];
     }
   }
-  
+
   size_t bytes = type_size * field_size;
   internal::cleanup_device_ptr(stream->stream, d_stream,0, 0, field->type);
   internal::cleanup_device_ptr(field->data, d_data, bytes, offset, field->type);
-  
-  // this is how zfp determins if this was a success
-  size_t words_read = decoded_bytes / sizeof(Word);
+
+  // this is how zfp determines if this was a success
+  /* If the mode is fixed accuracy or precision, decoded_bytes is not computed on correct execution */
+  size_t words_read;
+  switch(mode) {
+    case zfp_mode_fixed_rate:
+      words_read = decoded_bytes / sizeof(Word);
+      break;
+    case zfp_mode_fixed_accuracy:
+    case zfp_mode_fixed_precision:
+      words_read = stream->size / sizeof(Word);
+      break;
+  }
   stream->stream->bits = wsize;
   // set stream pointer to end of stream
   stream->stream->ptr = stream->stream->begin + words_read;

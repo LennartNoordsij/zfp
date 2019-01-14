@@ -127,9 +127,15 @@ typedef struct {
   uint chunk_size; /* number of blocks per chunk (1D only) */
 } zfp_exec_params_omp;
 
+/* CUDA execution parameters */
+typedef struct {
+  uint chunk_size; /* number of blocks per chunk */
+} zfp_exec_params_cuda;
+
 /* execution parameters */
 typedef union {
-  zfp_exec_params_omp omp; /* OpenMP parameters */
+  zfp_exec_params_omp omp;   /* OpenMP parameters */
+  zfp_exec_params_cuda cuda; /* CUDA parameters */
 } zfp_exec_params;
 
 typedef struct {
@@ -145,6 +151,7 @@ typedef struct {
   int minexp;         /* minimum floating point bit plane number to store */
   bitstream* stream;  /* compressed bit stream */
   zfp_execution exec; /* execution policy and parameters */
+  size_t size;        /* size of the compressed stream buffer */
 } zfp_stream;
 
 /* compression mode */
@@ -256,6 +263,13 @@ zfp_stream_set_bit_stream(
   bitstream* bs       /* bit stream to read from and write to */
 );
 
+/* set size of buffer for compressed data */
+void
+zfp_stream_set_size(
+  zfp_stream* zfp,   /* compressed stream */
+  size_t size        /* size of the buffer */
+);
+
 /* set size in compressed bits/scalar (fixed-rate mode) */
 double                /* actual rate in compressed bits/scalar */
 zfp_stream_set_rate(
@@ -318,6 +332,12 @@ zfp_stream_omp_chunk_size(
   const zfp_stream* stream /* compressed stream */
 );
 
+/* number of blocks per CUDA chunk */
+uint                       /* number of blocks per chunk */
+zfp_stream_cuda_chunk_size(
+  const zfp_stream* stream /* compressed stream */
+);
+
 /* set execution policy */
 int                      /* nonzero upon success */
 zfp_stream_set_execution(
@@ -337,6 +357,13 @@ int                   /* nonzero upon success */
 zfp_stream_set_omp_chunk_size(
   zfp_stream* stream, /* compressed stream */
   uint chunk_size     /* number of blocks per chunk (0 for default) */
+);
+
+/* set CUDA chunk size */
+int
+zfp_stream_set_cuda_chunk_size(
+  zfp_stream* stream, /* compressed stream */
+  uint chunk_size     /* number of blocks per chunk */
 );
 
 /* high-level API: uncompressed array construction/destruction ------------- */
