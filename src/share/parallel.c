@@ -1,8 +1,9 @@
 #ifdef _OPENMP
+#include <stdio.h>
 
 /* block index at which chunk begins */
 static uint
-chunk_offset(uint blocks, uint chunks, uint chunk)
+chunk_offset(uint blocks, uint chunks, int chunk)
 {
   return (uint)((blocks * (uint64)chunk) / chunks);
 }
@@ -81,6 +82,52 @@ compress_finish_par(zfp_stream* stream, bitstream** src, uint chunks)
   free(src);
   if (!copy)
     stream_wseek(dst, offset);
+}
+
+/* initialize per-thread bit streams for parallel decompression */
+static bitstream**
+decompress_init_par(zfp_stream* stream, const zfp_field* field, const uint chunks, const uint blocks)
+{
+  int i;
+  void * buffer = stream_data(zfp_stream_bit_stream(stream));
+  zfp_mode mode = zfp_stream_compression_mode(stream);
+  bitstream** bs = (bitstream**)malloc(chunks * sizeof(bitstream*));
+  if (!bs) {
+    fprintf(stderr, "cannot allocate memory for per-thread bit streams \n");
+    exit(EXIT_FAILURE);
+  }
+  const size_t size = stream_size(stream->stream);
+  if (mode == zfp_mode_fixed_precision || mode == zfp_mode_fixed_accuracy) {
+    uint64 * offset_table = stream->offset_table;
+    for (i = 0; i < (int)chunks; i++) {
+      /* read the chunk offset and set the bitstream to the start of the chunk */
+      bs[i] = stream_open(buffer, size);
+      stream_rseek(bs[i], (size_t)offset_table[i]);
+    }
+  }
+  else if (mode == zfp_mode_fixed_rate) {
+    const uint maxbits = stream->maxbits;
+    for (i = 0; i < (int)chunks; i++) {
+      /* chunk offsets are computed by block size in bits * index of first block in chunk */
+      bs[i] = stream_open(buffer, size);
+      size_t block = (size_t)chunk_offset(blocks, chunks, i);
+      stream_rseek(bs[i], ((size_t)maxbits * block));
+    }
+  }
+  else {
+    fprintf(stderr, "OpenMP decompression not supported for user-defined zfp modes\n");
+    exit(EXIT_FAILURE);
+  }
+  return bs;
+}
+
+static void
+decompress_finish_par(bitstream** bs, uint chunks)
+{
+  int i;
+  for (i = 0; i < (int)chunks; i++)
+    stream_close(bs[i]);
+  free(bs);
 }
 
 #endif

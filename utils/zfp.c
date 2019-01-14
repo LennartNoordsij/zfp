@@ -140,6 +140,7 @@ int main(int argc, char* argv[])
   uint ny = 0;
   uint nz = 0;
   uint nw = 0;
+  uint blocks = 0;
   size_t count = 0;
   double rate = 0;
   uint precision = 0;
@@ -167,9 +168,12 @@ int main(int argc, char* argv[])
   void* fi = NULL;
   void* fo = NULL;
   void* buffer = NULL;
+  uint64 * offset_table = NULL;
+  uint chunks = 0;
   size_t rawsize = 0;
   size_t zfpsize = 0;
   size_t bufsize = 0;
+  size_t offset_table_size = 0;
 
   if (argc == 1)
     usage();
@@ -503,6 +507,29 @@ int main(int argc, char* argv[])
     }
     zfp_stream_set_bit_stream(zfp, stream);
 
+    /* store block lengths in a table for fixed accuracy or precision headers
+    TODO: integrate this with the current ZFP header and move the header writing after the compression
+    TODO: merge with CUDA implementation, handle chunk size based on policy */
+    if ((exec == zfp_exec_omp || exec == zfp_exec_cuda) && (mode == 'a' || mode == 'p')) {
+      blocks = ((nx + 3)/4) * ((ny + 3)/4) * ((nz + 3)/4) * ((nw + 3)/4);
+      uint chunks;
+      if (chunk_size)
+        chunks = (blocks + chunk_size - 1) / chunk_size;
+      else if (threads)
+        chunks = threads;
+      else {
+        fprintf(stderr,"no chunk size or number of threads specified for parallel variable rate compression\n");
+        return EXIT_FAILURE;
+      }
+      offset_table_size = sizeof(uint64) * (size_t)chunks;
+      offset_table = malloc(offset_table_size);
+      if (!offset_table) {
+        fprintf(stderr, "cannot allocate memory for offset table \n");
+        return EXIT_FAILURE;
+      }
+      zfp_stream_set_offset_table(zfp, offset_table);
+    }
+
     /* optionally write header */
     if (header && !zfp_write_header(zfp, field, ZFP_HEADER_FULL)) {
       fprintf(stderr, "cannot write header\n");
@@ -523,8 +550,15 @@ int main(int argc, char* argv[])
         fprintf(stderr, "cannot create compressed file\n");
         return EXIT_FAILURE;
       }
+	    if ((exec == zfp_exec_omp || exec == zfp_exec_cuda) && (mode == 'a' || mode == 'p')) {
+        /* write the offset header to the file */
+        if (fwrite(offset_table, sizeof(uint64), chunks, file) != chunks) {
+          fprintf(stderr, "cannot write chunk offset table to file\n");
+          return EXIT_FAILURE;
+        }
+      }
       if (fwrite(buffer, 1, zfpsize, file) != zfpsize) {
-        fprintf(stderr, "cannot write compressed file\n");
+        fprintf(stderr, "cannot write compressed data to file\n");
         return EXIT_FAILURE;
       }
       fclose(file);
@@ -568,9 +602,30 @@ int main(int argc, char* argv[])
     }
     zfp_field_set_pointer(field, fo);
 
+    /* check if offset table is present in the zfp stream struct or in the input file
+    TODO: merge with CUDA implementation, handle chunk size based on policy */
+    if(offset_table == NULL && (exec == zfp_exec_omp || exec == zfp_exec_cuda) && (mode == 'a' || mode == 'p')) {
+      blocks = ((nx + 3)/4) * ((ny + 3)/4) * ((nz + 3)/4) * ((nw + 3)/4);
+      uint chunks;
+      if (chunk_size)
+        chunks = (blocks + chunk_size - 1) / chunk_size;
+      else if (threads)
+        chunks = threads;
+      else {
+        fprintf(stderr,"no chunk size or number of threads specified for parallel variable rate compression\n");
+        return EXIT_FAILURE;
+      }
+      uint64 * offset_table_pointer = (uint64 *)buffer;
+      zfp_stream_set_offset_table(zfp, offset_table_pointer);
+      void* temp = (void*)((uint64 *)buffer + chunks);
+      stream = stream_open(temp, bufsize - chunks * sizeof(uint64));
+      zfp_stream_set_bit_stream(zfp, stream);
+    }
+
     /* decompress data */
     while (!zfp_decompress(zfp, field)) {
-      /* fall back on serial decompression if execution policy not supported */
+      /* fall back on serial decompression if execution policy not supported
+         TODO: look into removing this exception as all modes are now supported */
       if (inpath && zfp_stream_execution(zfp) != zfp_exec_serial) {
         if (!zfp_stream_set_execution(zfp, zfp_exec_serial)) {
           fprintf(stderr, "cannot change execution policy\n");
@@ -615,6 +670,8 @@ int main(int argc, char* argv[])
   free(buffer);
   free(fi);
   free(fo);
+  if(offset_table)
+  free(offset_table);
 
   return EXIT_SUCCESS;
 }
