@@ -2,8 +2,6 @@
 #define CUZFP_SHARED_H
 
 #define CUDA_ZFP_RATE_PRINT 1
-#define CHUNK_SIZE 10
-#define HEADER_BITS 64
 
 typedef unsigned long long Word;
 #define Wsize ((uint)(CHAR_BIT * sizeof(Word)))

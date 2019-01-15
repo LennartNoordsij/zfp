@@ -140,7 +140,6 @@ int main(int argc, char* argv[])
   uint ny = 0;
   uint nz = 0;
   uint nw = 0;
-  uint blocks = 0;
   size_t count = 0;
   double rate = 0;
   uint precision = 0;
@@ -169,7 +168,8 @@ int main(int argc, char* argv[])
   void* fo = NULL;
   void* buffer = NULL;
   uint64 * offset_table = NULL;
-  uint chunks = 0;
+  size_t blocks = 0;
+  size_t chunks = 0;
   size_t rawsize = 0;
   size_t zfpsize = 0;
   size_t bufsize = 0;
@@ -387,6 +387,30 @@ int main(int argc, char* argv[])
       fprintf(stderr, "cannot open compressed file\n");
       return EXIT_FAILURE;
     }
+    if ((exec == zfp_exec_omp || exec == zfp_exec_cuda) && (mode == 'a' || mode == 'p')) {
+      /* read the offset_table from the file */
+      blocks = (size_t)((nx + 3)/4) * (size_t)((ny + 3)/4) * (size_t)((nz + 3)/4) * (size_t)((nw + 3)/4);
+      if (chunk_size)
+        chunks = (blocks + chunk_size - 1) / chunk_size;
+      else if (threads && exec == zfp_exec_omp)
+        chunks = threads;
+      else {
+        fprintf(stderr,"no chunk size specified for parallel variable rate decompression\n");
+        return EXIT_FAILURE;
+      }
+      offset_table_size = chunks * sizeof(uint64);
+      offset_table = malloc(offset_table_size);
+      if (!offset_table) {
+        fprintf(stderr, "cannot allocate memory for offset table\n");
+        return EXIT_FAILURE;
+      }
+      fread(offset_table, sizeof(uint64), chunks, file);
+      zfp_stream_set_offset_table(zfp, offset_table);
+      if (ferror(file)) {
+        fprintf(stderr, "cannot read compressed file\n");
+      return EXIT_FAILURE;
+      }
+    }
     bufsize = 0x100;
     do {
       bufsize *= 2;
@@ -508,23 +532,21 @@ int main(int argc, char* argv[])
     zfp_stream_set_bit_stream(zfp, stream);
 
     /* store block lengths in a table for fixed accuracy or precision headers
-    TODO: integrate this with the current ZFP header and move the header writing after the compression
-    TODO: merge with CUDA implementation, handle chunk size based on policy */
+    TODO: integrate this with the current ZFP header and move the header writing after the compression */
     if ((exec == zfp_exec_omp || exec == zfp_exec_cuda) && (mode == 'a' || mode == 'p')) {
-      blocks = ((nx + 3)/4) * ((ny + 3)/4) * ((nz + 3)/4) * ((nw + 3)/4);
-      uint chunks;
+      blocks = (size_t)((nx + 3)/4) * (size_t)((ny + 3)/4) * (size_t)((nz + 3)/4) * (size_t)((nw + 3)/4);
       if (chunk_size)
         chunks = (blocks + chunk_size - 1) / chunk_size;
-      else if (threads)
+      else if (threads && exec == zfp_exec_omp)
         chunks = threads;
       else {
-        fprintf(stderr,"no chunk size or number of threads specified for parallel variable rate compression\n");
+        fprintf(stderr,"no chunk size specified for parallel variable rate compression\n");
         return EXIT_FAILURE;
       }
-      offset_table_size = sizeof(uint64) * (size_t)chunks;
+      offset_table_size = sizeof(uint64) * chunks;
       offset_table = malloc(offset_table_size);
       if (!offset_table) {
-        fprintf(stderr, "cannot allocate memory for offset table \n");
+        fprintf(stderr, "cannot allocate memory for offset table\n");
         return EXIT_FAILURE;
       }
       zfp_stream_set_offset_table(zfp, offset_table);
@@ -601,26 +623,6 @@ int main(int argc, char* argv[])
       return EXIT_FAILURE;
     }
     zfp_field_set_pointer(field, fo);
-
-    /* check if offset table is present in the zfp stream struct or in the input file
-    TODO: merge with CUDA implementation, handle chunk size based on policy */
-    if(offset_table == NULL && (exec == zfp_exec_omp || exec == zfp_exec_cuda) && (mode == 'a' || mode == 'p')) {
-      blocks = ((nx + 3)/4) * ((ny + 3)/4) * ((nz + 3)/4) * ((nw + 3)/4);
-      uint chunks;
-      if (chunk_size)
-        chunks = (blocks + chunk_size - 1) / chunk_size;
-      else if (threads)
-        chunks = threads;
-      else {
-        fprintf(stderr,"no chunk size or number of threads specified for parallel variable rate compression\n");
-        return EXIT_FAILURE;
-      }
-      uint64 * offset_table_pointer = (uint64 *)buffer;
-      zfp_stream_set_offset_table(zfp, offset_table_pointer);
-      void* temp = (void*)((uint64 *)buffer + chunks);
-      stream = stream_open(temp, bufsize - chunks * sizeof(uint64));
-      zfp_stream_set_bit_stream(zfp, stream);
-    }
 
     /* decompress data */
     while (!zfp_decompress(zfp, field)) {

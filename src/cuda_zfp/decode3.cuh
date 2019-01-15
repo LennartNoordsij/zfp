@@ -34,6 +34,7 @@ template<class Scalar, int BlockSize>
 __global__
 void
 cudaDecode3(Word *blocks,
+            Word *offset_table,
             Scalar *out,
             const uint3 dims,
             const int3 stride,
@@ -63,12 +64,9 @@ cudaDecode3(Word *blocks,
       break;
     case zfp_mode_fixed_accuracy:
     case zfp_mode_fixed_precision:
-      /* TODO: Decide if bits per block in header is fixed or variable and how to pass it */
       block_idx = thread_idx * chunk_size;
       bmax = MIN(block_idx + chunk_size, total_blocks);
-      const int chunks = (total_blocks + chunk_size - 1) / chunk_size;
-      /* TODO: Separate header and data when transferring. Current implementation only works when the amount of bits per chunk is equal to the CUDA word size (64) */
-      bit_offset = (chunks * HEADER_BITS) + blocks[thread_idx];
+      bit_offset = offset_table[thread_idx];
       break;
   }
 
@@ -114,6 +112,7 @@ template<class Scalar>
 size_t decode3launch(uint3 dims,
                      int3 stride,
                      Word *stream,
+                     Word *offset_table,
                      Scalar *d_data,
                      int param,
                      zfp_mode mode,
@@ -162,6 +161,7 @@ size_t decode3launch(uint3 dims,
 
   cudaDecode3<Scalar, 64> << < grid_size, block_size >> >
     (stream,
+     offset_table,
      d_data,
      dims,
      stride,
@@ -194,12 +194,13 @@ template<class Scalar>
 size_t decode3(uint3 dims, 
                int3 stride,
                Word  *stream,
+               Word *offset_table,
                Scalar *d_data,
                int param,
                zfp_mode mode,
                uint chunk_size)
 {
-	return decode3launch<Scalar>(dims, stride, stream, d_data, param, mode, chunk_size);
+	return decode3launch<Scalar>(dims, stride, stream, offset_table, d_data, param, mode, chunk_size);
 }
 
 } // namespace cuZFP

@@ -31,6 +31,7 @@ template<class Scalar, int BlockSize>
 __global__
 void
 cudaDecode2(Word *blocks,
+            Word *offset_table,
             Scalar *out,
             const uint2 dims,
             const int2 stride,
@@ -59,12 +60,9 @@ cudaDecode2(Word *blocks,
       break;
     case zfp_mode_fixed_accuracy:
     case zfp_mode_fixed_precision:
-      /* TODO: Decide if bits per block in header is fixed or variable and how to pass it */
       block_idx = thread_idx * chunk_size;
       bmax = MIN(block_idx + chunk_size, total_blocks);
-      const int chunks = (total_blocks + chunk_size - 1) / chunk_size;
-      /* TODO: Separate header and data when transferring. Current implementation only works when the amount of bits per chunk is equal to the CUDA word size (64) */
-      bit_offset = (chunks * HEADER_BITS) + blocks[thread_idx];
+      bit_offset = offset_table[thread_idx];
       break;
   }
 
@@ -107,6 +105,7 @@ template<class Scalar>
 size_t decode2launch(uint2 dims,
                      int2 stride,
                      Word *stream,
+                     Word *offset_table,
                      Scalar *d_data,
                      int param,
                      zfp_mode mode,
@@ -125,7 +124,7 @@ size_t decode2launch(uint2 dims,
 
   switch(mode) {
     case zfp_mode_fixed_rate:
-      cuda_block_size = 32;
+      cuda_block_size = 128;
       stream_bytes = calc_device_mem2d(zfp_pad, param);
       total_blocks = zfp_blocks;
       if(zfp_blocks % cuda_block_size != 0)
@@ -154,6 +153,7 @@ size_t decode2launch(uint2 dims,
 
   cudaDecode2<Scalar, 16> << < grid_size, block_size >> >
     (stream,
+     offset_table,
      d_data,
      dims,
      stride,
@@ -188,12 +188,13 @@ template<class Scalar>
 size_t decode2(uint2 dims, 
                int2 stride,
                Word *stream,
+               Word *offset_table,
                Scalar *d_data,
                int param,
                zfp_mode mode,
                uint chunk_size)
 {
- return decode2launch<Scalar>(dims, stride, stream, d_data, param, mode, chunk_size);
+ return decode2launch<Scalar>(dims, stride, stream, offset_table, d_data, param, mode, chunk_size);
 }
 
 } // namespace cuZFP
