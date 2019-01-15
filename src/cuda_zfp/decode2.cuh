@@ -174,9 +174,8 @@ size_t decode2launch(uint2 dims,
   rate /= 1024.f;
   rate /= 1024.f;
   rate /= 1024.f;
-  printf("%.2f",rate);
-//  printf("Decode elapsed time: %.5f (s)\n", seconds);
-//  printf("# decode2 rate: %.2f (GB / sec) %d\n", rate, param);
+  printf("Decode elapsed time: %.5f (s)\n", seconds);
+  printf("# decode2 rate: %.2f (GB / sec) %d\n", rate, param);
 #endif
 
   return stream_bytes;
