@@ -52,7 +52,7 @@ cudaDecode1(Word *blocks,
   const ull thread_idx = blockId * blockDim.x + threadIdx.x;
   
   ll bit_offset;
-  int bmax, block_idx;
+  uint bmax, block_idx;
 
   switch(mode) {
     case zfp_mode_fixed_rate:
@@ -75,8 +75,7 @@ cudaDecode1(Word *blocks,
     Scalar result[4] = {0};
     zfp_decode<Scalar,4>(reader, result, param, mode, 1);
 
-    uint block;
-    block = block_idx * 4ull;
+    uint block = block_idx * 4;
     const ll offset = (ll)block * stride;
     if(block + 4 > dim)
     {
@@ -123,7 +122,10 @@ size_t decode1launch(uint dim,
       cuda_block_size = 64;
       stream_bytes = 1;
       total_blocks = (zfp_blocks + chunk_size - 1) / chunk_size;
+      if(total_blocks % cuda_block_size != 0)
+        total_blocks += (cuda_block_size - total_blocks % cuda_block_size);
       break;
+
   }
   dim3 block_size = dim3(cuda_block_size, 1, 1);
   dim3 grid_size = calculate_grid_size(total_blocks, cuda_block_size);

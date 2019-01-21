@@ -54,7 +54,7 @@ cudaDecode3(Word *blocks,
   const int total_blocks = (padded_dims.x * padded_dims.y * padded_dims.z) / 64;
 
   ll bit_offset;
-  int bmax, block_idx;
+  uint bmax, block_idx;
 
   switch(mode) {
     case zfp_mode_fixed_rate:
@@ -70,6 +70,12 @@ cudaDecode3(Word *blocks,
       break;
   }
 
+  // logical block dims
+  uint3 block_dims;
+  block_dims.x = padded_dims.x >> 2;
+  block_dims.y = padded_dims.y >> 2;
+  block_dims.z = padded_dims.z >> 2;
+
   BlockReader<BlockSize> reader(blocks, bit_offset);
 
   for (; block_idx < bmax; block_idx++)
@@ -77,11 +83,6 @@ cudaDecode3(Word *blocks,
     Scalar result[BlockSize] = {0};
     zfp_decode<Scalar,BlockSize>(reader, result, param, mode, 3);
 
-    // logical block dims
-    uint3 block_dims;
-    block_dims.x = padded_dims.x >> 2;
-    block_dims.y = padded_dims.y >> 2;
-    block_dims.z = padded_dims.z >> 2;
     // logical pos in 3d array
     uint3 block;
     block.x = (block_idx % block_dims.x) * 4;
@@ -90,11 +91,8 @@ cudaDecode3(Word *blocks,
 
     // default strides
     const ll offset = (ll)block.x * stride.x + (ll)block.y * stride.y + (ll)block.z * stride.z;
-    bool partial = false;
-    if(block.x + 4 > dims.x) partial = true;
-    if(block.y + 4 > dims.y) partial = true;
-    if(block.z + 4 > dims.z) partial = true;
-    if(partial)
+
+    if(block.x + 4 > dims.x || block.y + 4 > dims.y || block.z + 4 > dims.z)
     {
       const uint nx = block.x + 4u > dims.x ? dims.x - block.x : 4;
       const uint ny = block.y + 4u > dims.y ? dims.y - block.y : 4;
@@ -146,7 +144,10 @@ size_t decode3launch(uint3 dims,
       /* Set stream bytes to the actual size */
       stream_bytes = 1;
       total_blocks = (zfp_blocks + chunk_size - 1) / chunk_size;
+      if(total_blocks % cuda_block_size != 0)
+        total_blocks += (cuda_block_size - total_blocks % cuda_block_size);
       break;
+
   }
   dim3 block_size = dim3(cuda_block_size, 1, 1);
   dim3 grid_size = calculate_grid_size(total_blocks, cuda_block_size);
