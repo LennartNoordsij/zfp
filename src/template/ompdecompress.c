@@ -11,6 +11,7 @@ _t2(decompress_omp, Scalar, 1)(zfp_stream* stream, zfp_field* field)
   /* calculate the number of blocks and chunks */
   const uint blocks = (nx + 3) / 4;
   const uint chunks = chunk_count_omp(stream, blocks, threads);
+  const uint chunk_size = chunk_size_omp(stream, blocks, threads);
 
   /* allocate per-thread streams */
   bitstream** bs = decompress_init_par(stream, field, chunks, blocks);
@@ -24,8 +25,8 @@ _t2(decompress_omp, Scalar, 1)(zfp_stream* stream, zfp_field* field)
   #pragma omp parallel for num_threads(threads)
   for (chunk = 0; chunk < (int)chunks; chunk++) {
     /* determine range of block indices assigned to this thread */
-    const uint bmin = chunk_offset(blocks, chunks, chunk + 0);
-    const uint bmax = chunk_offset(blocks, chunks, chunk + 1);
+    const uint bmin = chunk * chunk_size;
+    const uint bmax = MIN(bmin + chunk_size, blocks);
     uint block;
 
     /* set up thread-local bit stream */
@@ -60,6 +61,7 @@ _t2(decompress_strided_omp, Scalar, 1)(zfp_stream* stream, zfp_field* field)
   /* calculate the number of blocks and chunks */
   const uint blocks = (nx + 3) / 4;
   const uint chunks = chunk_count_omp(stream, blocks, threads);
+  const uint chunk_size = chunk_size_omp(stream, blocks, threads);
 
   /* allocate per-thread streams */
   bitstream** bs = decompress_init_par(stream, field, chunks, blocks);
@@ -73,8 +75,8 @@ _t2(decompress_strided_omp, Scalar, 1)(zfp_stream* stream, zfp_field* field)
   #pragma omp parallel for num_threads(threads)
   for (chunk = 0; chunk < (int)chunks; chunk++) {
     /* determine range of block indices assigned to this thread */
-    const uint bmin = chunk_offset(blocks, chunks, chunk + 0);
-    const uint bmax = chunk_offset(blocks, chunks, chunk + 1);
+    const uint bmin = chunk * chunk_size;
+    const uint bmax = MIN(bmin + chunk_size, blocks);
     uint block;
 
     /* set up thread-local bit stream */
@@ -113,6 +115,7 @@ _t2(decompress_strided_omp, Scalar, 2)(zfp_stream* stream, zfp_field* field)
   const uint by = (ny + 3) / 4;
   const uint blocks = bx * by;
   const uint chunks = chunk_count_omp(stream, blocks, threads);
+  const uint chunk_size = chunk_size_omp(stream, blocks, threads);
 
   /* allocate per-thread streams */
   bitstream** bs = decompress_init_par(stream, field, chunks, blocks);
@@ -126,8 +129,8 @@ _t2(decompress_strided_omp, Scalar, 2)(zfp_stream* stream, zfp_field* field)
   #pragma omp parallel for num_threads(threads)
   for (chunk = 0; chunk < (int)chunks; chunk++) {
     /* determine range of block indices assigned to this thread */
-    const uint bmin = chunk_offset(blocks, chunks, chunk + 0);
-    const uint bmax =  chunk_offset(blocks, chunks, chunk + 1);
+    const uint bmin = chunk * chunk_size;
+    const uint bmax = MIN(bmin + chunk_size, blocks);
     uint block;
 
     /* set up thread-local bit stream */
@@ -170,6 +173,7 @@ _t2(decompress_strided_omp, Scalar, 3)(zfp_stream* stream, zfp_field* field)
   const uint bz = (nz + 3) / 4;
   const uint blocks = bx * by * bz;
   const uint chunks = chunk_count_omp(stream, blocks, threads);
+  const uint chunk_size = chunk_size_omp(stream, blocks, threads);
 
   /* allocate per-thread streams */
   bitstream** bs = decompress_init_par(stream, field, chunks, blocks);
@@ -183,8 +187,8 @@ _t2(decompress_strided_omp, Scalar, 3)(zfp_stream* stream, zfp_field* field)
   #pragma omp parallel for num_threads(threads)
   for (chunk = 0; chunk < (int)chunks; chunk++) {
     /* determine range of block indices assigned to this thread */
-    const uint bmin = chunk_offset(blocks, chunks, chunk + 0);
-    const uint bmax =  chunk_offset(blocks, chunks, chunk + 1);
+    const uint bmin = chunk * chunk_size;
+    const uint bmax = MIN(bmin + chunk_size, blocks);
     uint block;
 
     /* set up thread-local bit stream */
@@ -231,6 +235,7 @@ _t2(decompress_strided_omp, Scalar, 4)(zfp_stream* stream, zfp_field* field)
   const uint bw = (nw + 3) / 4;
   const uint blocks = bx * by * bz * bw;
   const uint chunks = chunk_count_omp(stream, blocks, threads);
+  const uint chunk_size = chunk_size_omp(stream, blocks, threads);
 
   /* allocate per-thread streams */
   bitstream** bs = decompress_init_par(stream, field, chunks, blocks);
@@ -244,8 +249,8 @@ _t2(decompress_strided_omp, Scalar, 4)(zfp_stream* stream, zfp_field* field)
   #pragma omp parallel for num_threads(threads)
   for (chunk = 0; chunk < (int)chunks; chunk++) {
     /* determine range of block indices assigned to this thread */
-    const uint bmin = chunk_offset(blocks, chunks, chunk + 0);
-    const uint bmax =  chunk_offset(blocks, chunks, chunk + 1);
+    const uint bmin = chunk * chunk_size;
+    const uint bmax = MIN(bmin + chunk_size, blocks);
     uint block;
 
     /* set up thread-local bit stream */
