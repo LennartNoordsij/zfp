@@ -2,6 +2,7 @@
 #define CUZFP_SHARED_H
 
 //#define CUDA_ZFP_RATE_PRINT 1
+
 typedef unsigned long long Word;
 #define Wsize ((uint)(CHAR_BIT * sizeof(Word)))
 
@@ -100,7 +101,8 @@ dim3 get_max_grid_dims()
 // size is assumed to have a pad to the nearest cuda block size
 dim3 calculate_grid_size(size_t size, size_t cuda_block_size)
 {
-  size_t grids = size / cuda_block_size; // because of pad this will be exact
+  /* always divisible due to padding */
+  size_t grids = size / cuda_block_size;
   dim3 max_grid_dims = get_max_grid_dims();
   int dims  = 1;
   // check to see if we need to add more grids

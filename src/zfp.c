@@ -42,6 +42,7 @@ type_precision(zfp_type type)
 #include "template/compress.c"
 #include "template/decompress.c"
 #include "template/ompcompress.c"
+#include "template/ompdecompress.c"
 #include "template/cudacompress.c"
 #include "template/cudadecompress.c"
 #undef Scalar
@@ -50,6 +51,7 @@ type_precision(zfp_type type)
 #include "template/compress.c"
 #include "template/decompress.c"
 #include "template/ompcompress.c"
+#include "template/ompdecompress.c"
 #include "template/cudacompress.c"
 #include "template/cudadecompress.c"
 #undef Scalar
@@ -58,6 +60,7 @@ type_precision(zfp_type type)
 #include "template/compress.c"
 #include "template/decompress.c"
 #include "template/ompcompress.c"
+#include "template/ompdecompress.c"
 #include "template/cudacompress.c"
 #include "template/cudadecompress.c"
 #undef Scalar
@@ -66,6 +69,7 @@ type_precision(zfp_type type)
 #include "template/compress.c"
 #include "template/decompress.c"
 #include "template/ompcompress.c"
+#include "template/ompdecompress.c"
 #include "template/cudacompress.c"
 #include "template/cudadecompress.c"
 #undef Scalar
@@ -405,6 +409,7 @@ zfp_stream_open(bitstream* stream)
     zfp->maxprec = ZFP_MAX_PREC;
     zfp->minexp = ZFP_MIN_EXP;
     zfp->exec.policy = zfp_exec_serial;
+    zfp->side_channel = NULL;
   }
   return zfp;
 }
@@ -567,6 +572,12 @@ zfp_stream_set_bit_stream(zfp_stream* zfp, bitstream* stream)
   zfp->stream = stream;
 }
 
+void
+zfp_stream_set_size(zfp_stream* zfp, size_t size)
+{
+  zfp->size = size;
+}
+
 double
 zfp_stream_set_rate(zfp_stream* zfp, double rate, zfp_type type, uint dims, int wra)
 {
@@ -676,6 +687,12 @@ zfp_stream_set_params(zfp_stream* zfp, uint minbits, uint maxbits, uint maxprec,
   return 1;
 }
 
+void
+zfp_stream_set_side_channel(zfp_stream* zfp, zfp_side_channel* side_channel)
+{
+  zfp->side_channel = side_channel;
+}
+
 size_t
 zfp_stream_flush(zfp_stream* zfp)
 {
@@ -757,6 +774,39 @@ zfp_stream_set_omp_chunk_size(zfp_stream* zfp, uint chunk_size)
     return 0;
   zfp->exec.params.omp.chunk_size = chunk_size;
   return 1;
+}
+
+/* public functions: side channel info --------------------------------------*/
+
+zfp_side_channel*
+side_channel_alloc()
+{
+  zfp_side_channel* side_channel = (zfp_side_channel*)malloc(sizeof(zfp_side_channel));
+  if (side_channel) {
+    side_channel->length_table = NULL;
+    side_channel->type = 0;
+    side_channel->chunk_size = 0;
+    side_channel->side_channel_data = NULL;
+  }
+  return side_channel;
+}
+
+int
+side_channel_set_params(zfp_side_channel* side_channel, uint16 * length_table, side_channel_type type, uint chunk_size, void * side_channel_data)
+{
+  if (!side_channel)
+    return 0;
+  side_channel->length_table = length_table;
+  side_channel->type = type;
+  side_channel->chunk_size = chunk_size;
+  side_channel->side_channel_data = side_channel_data;
+  return 1;
+}
+
+void
+free_side_channel(zfp_side_channel* side_channel)
+{
+  free(side_channel);
 }
 
 /* public functions: utility functions --------------------------------------*/
@@ -920,8 +970,19 @@ zfp_decompress(zfp_stream* zfp, zfp_field* field)
       { decompress_strided_int32_3, decompress_strided_int64_3, decompress_strided_float_3, decompress_strided_double_3 },
       { decompress_strided_int32_4, decompress_strided_int64_4, decompress_strided_float_4, decompress_strided_double_4 }}},
 
-    /* OpenMP; not yet supported */
+    /* OpenMP */
+#ifdef _OPENMP
+    {{{ decompress_omp_int32_1,         decompress_omp_int64_1,         decompress_omp_float_1,         decompress_omp_double_1 },
+      { decompress_strided_omp_int32_2, decompress_strided_omp_int64_2, decompress_strided_omp_float_2, decompress_strided_omp_double_2 },
+      { decompress_strided_omp_int32_3, decompress_strided_omp_int64_3, decompress_strided_omp_float_3, decompress_strided_omp_double_3 },
+      { decompress_strided_omp_int32_4, decompress_strided_omp_int64_4, decompress_strided_omp_float_4, decompress_strided_omp_double_4 }},
+     {{ decompress_strided_omp_int32_1, decompress_strided_omp_int64_1, decompress_strided_omp_float_1, decompress_strided_omp_double_1 },
+      { decompress_strided_omp_int32_2, decompress_strided_omp_int64_2, decompress_strided_omp_float_2, decompress_strided_omp_double_2 },
+      { decompress_strided_omp_int32_3, decompress_strided_omp_int64_3, decompress_strided_omp_float_3, decompress_strided_omp_double_3 },
+      { decompress_strided_omp_int32_4, decompress_strided_omp_int64_4, decompress_strided_omp_float_4, decompress_strided_omp_double_4 }}},
+#else
     {{{ NULL }}},
+#endif
 
     /* CUDA */
 #ifdef ZFP_WITH_CUDA

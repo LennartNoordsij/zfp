@@ -77,6 +77,7 @@ print_error(const void* fin, const void* fout, zfp_type type, size_t n)
   ermsn = erms / (fmax - fmin);
   psnr = 20 * log10((fmax - fmin) / (2 * erms));
   fprintf(stderr, " rmse=%.4g nrmse=%.4g maxe=%.4g psnr=%.2f", erms, ermsn, emax, psnr);
+//  fprintf(stderr, "%.4g,%.2f", ermsn, psnr);
 }
 
 static void
@@ -112,7 +113,11 @@ usage()
   fprintf(stderr, "Execution parameters:\n");
   fprintf(stderr, "  -x serial : serial compression (default)\n");
   fprintf(stderr, "  -x omp[=threads[,chunk_size]] : OpenMP parallel compression\n");
-  fprintf(stderr, "  -x cuda : CUDA fixed rate parallel compression/decompression\n");
+  fprintf(stderr, "  -x cuda : CUDA parallel compression/decompression\n");
+  fprintf(stderr, "Side channel information for parallel decompression (needed with -o and cuda or omp:\n");
+  fprintf(stderr, "  -y offset=[chunk_size] <path> : offset table and chunk size for openMP\n");
+  fprintf(stderr, "  -y hybrid=[chunk_size] <path> : offset-length hybrid table for CUDA\n");
+  fprintf(stderr, "  -y length <path> : length table for data analysis and possible future implementation\n");
   fprintf(stderr, "Examples:\n");
   fprintf(stderr, "  -i file : read uncompressed file and compress to memory\n");
   fprintf(stderr, "  -z file : read compressed file and decompress to memory\n");
@@ -154,22 +159,33 @@ int main(int argc, char* argv[])
   char* inpath = 0;
   char* zfppath = 0;
   char* outpath = 0;
+  char* tablepath = 0;
   char mode = 0;
   zfp_exec_policy exec = zfp_exec_serial;
+  side_channel_type table_type = none;
   uint threads = 0;
-  uint chunk_size = 0;
+  uint omp_chunk_size = 0;
+  uint side_chunk_size = 0;
+  uint partitions = 0;
 
   /* local variables */
   int i;
   zfp_field* field = NULL;
   zfp_stream* zfp = NULL;
   bitstream* stream = NULL;
+  zfp_side_channel* side_channel = NULL;
   void* fi = NULL;
   void* fo = NULL;
   void* buffer = NULL;
+  void* par_table = NULL;
+  uint16 * length_table = NULL;
+  size_t blocks = 0;
+  size_t chunks = 0;
   size_t rawsize = 0;
   size_t zfpsize = 0;
   size_t bufsize = 0;
+  size_t length_table_size = 0;
+  size_t par_table_size = 0;
 
   if (argc == 1)
     usage();
@@ -275,21 +291,36 @@ int main(int argc, char* argv[])
           usage();
         if (!strcmp(argv[i], "serial"))
           exec = zfp_exec_serial;
-        else if (sscanf(argv[i], "omp=%u,%u", &threads, &chunk_size) == 2)
+        else if (sscanf(argv[i], "omp=%u,%u", &threads, &omp_chunk_size) == 2)
           exec = zfp_exec_omp;
         else if (sscanf(argv[i], "omp=%u", &threads) == 1) {
           exec = zfp_exec_omp;
-          chunk_size = 0;
+          omp_chunk_size = 0;
         }
         else if (!strcmp(argv[i], "omp")) {
           exec = zfp_exec_omp;
           threads = 0;
-          chunk_size = 0;
+          omp_chunk_size = 0;
         }
         else if (!strcmp(argv[i], "cuda"))
           exec = zfp_exec_cuda;
         else
           usage();
+        break;
+      case 'y':
+        if (++i == argc)
+          usage();
+        else if (sscanf(argv[i], "hybrid=%u", &side_chunk_size) == 1)
+          table_type = hybrid;
+        else if (sscanf(argv[i], "offset=%u", &side_chunk_size) == 1)
+          table_type = offset;
+        else if (sscanf(argv[i], "length=%u", &side_chunk_size) == 1)
+          table_type = length;
+        else
+          usage();
+        if (++i == argc)
+          usage();
+        tablepath = argv[i];
         break;
       case 'z':
         if (++i == argc)
@@ -317,40 +348,22 @@ int main(int argc, char* argv[])
     return EXIT_FAILURE;
   }
 
-  /* make sure we (will) know scalar type */
-  if (!typesize) {
-    if (inpath) {
-      fprintf(stderr, "must specify scalar type via -f, -d, or -t to compress\n");
-      return EXIT_FAILURE;
-    }
-    else if (!header) {
-      fprintf(stderr, "must specify scalar type via -f, -d, or -t or header via -h to decompress\n");
-      return EXIT_FAILURE;
-    }
+  /* make sure we know floating-point type */
+  if ((inpath || !header) && !typesize) {
+    fprintf(stderr, "must specify scalar type via -f, -d, or -t or header via -h\n");
+    return EXIT_FAILURE;
   }
 
-  /* make sure we (will) know array dimensions */
-  if (!dims) {
-    if (inpath) {
-      fprintf(stderr, "must specify array dimensions via -1, -2, -3, or -4 to compress\n");
-      return EXIT_FAILURE;
-    }
-    else if (!header) {
-      fprintf(stderr, "must specify array dimensions via -1, -2, -3, or -4 or header via -h to decompress\n");
-      return EXIT_FAILURE;
-    }
+  /* make sure we know array dimensions */
+  if ((inpath || !header) && !dims) {
+    fprintf(stderr, "must specify array dimensions via -1, -2, or -3 or header via -h\n");
+    return EXIT_FAILURE;
   }
 
-  /* make sure we (will) know (de)compression mode and parameters */
-  if (!mode) {
-    if (inpath) {
-      fprintf(stderr, "must specify compression parameters via -a, -c, -p, or -r to compress\n");
-      return EXIT_FAILURE;
-    }
-    else if (!header) {
-      fprintf(stderr, "must specify compression parameters via -a, -c, -p, or -r or header via -h to decompress\n");
-      return EXIT_FAILURE;
-    }
+  /* make sure we know (de)compression mode and parameters */
+  if ((inpath || !header) && !mode) {
+    fprintf(stderr, "must specify compression parameters via -a, -c, -p, or -r or header via -h\n");
+    return EXIT_FAILURE;
   }
 
   /* make sure we have input file for stats */
@@ -367,6 +380,7 @@ int main(int argc, char* argv[])
 
   zfp = zfp_stream_open(NULL);
   field = zfp_field_alloc();
+  side_channel = side_channel_alloc();
 
   /* read uncompressed or compressed file */
   if (inpath) {
@@ -379,7 +393,7 @@ int main(int argc, char* argv[])
     rawsize = typesize * count;
     fi = malloc(rawsize);
     if (!fi) {
-      fprintf(stderr, "cannot allocate memory\n");
+      fprintf(stderr, "cannot allocate memory for uncompressed input file\n");
       return EXIT_FAILURE;
     }
     if (fread(fi, typesize, count, file) != count) {
@@ -401,7 +415,7 @@ int main(int argc, char* argv[])
       bufsize *= 2;
       buffer = realloc(buffer, bufsize);
       if (!buffer) {
-        fprintf(stderr, "cannot allocate memory\n");
+        fprintf(stderr, "cannot allocate memory for compressed file\n");
         return EXIT_FAILURE;
       }
       zfpsize += fread((uchar*)buffer + zfpsize, 1, bufsize - zfpsize, file);
@@ -411,6 +425,63 @@ int main(int argc, char* argv[])
       return EXIT_FAILURE;
     }
     fclose(file);
+    /* for CUDA decompression, store the size of the buffer in the zfp_stream */
+    zfp_stream_set_size(zfp, zfpsize);
+
+    /* optionally read the side channel information */
+    if (table_type != none) {
+      FILE* table = fopen(tablepath, "rb");
+      if (!table) {
+        fprintf(stderr, "cannot open side channel information\n");
+        return EXIT_FAILURE;
+      }
+      blocks = (size_t)((nx + 3)/4) * (size_t)((ny + 3)/4) * (size_t)((nz + 3)/4) * (size_t)((nw + 3)/4);
+      switch(table_type) {
+        case offset:
+          if (!side_chunk_size) {
+            fprintf(stderr,"offset table requires a nonzero chunk size\n");
+            return EXIT_FAILURE;
+          }
+          chunks = (blocks + side_chunk_size - 1) / side_chunk_size;
+          par_table_size = chunks * sizeof(uint64);
+          par_table = malloc(par_table_size);
+          if (!par_table) {
+            fprintf(stderr, "cannot allocate memory for side-channel information\n");
+            return EXIT_FAILURE;
+          }
+          fread(par_table, sizeof(uint64), chunks, table);
+          side_channel_set_params(side_channel, length_table, table_type, side_chunk_size, par_table);
+          zfp_stream_set_side_channel(zfp, side_channel);
+          break;
+        case hybrid:
+          chunks = (blocks + side_chunk_size - 1) / side_chunk_size;
+          partitions = (chunks + PARTITION_SIZE - 1) / PARTITION_SIZE;
+          par_table_size = partitions * PARTITION_BYTES;
+          par_table = malloc(par_table_size);
+          if (!par_table) {
+            fprintf(stderr, "cannot allocate memory for side-channel information\n");
+            return EXIT_FAILURE;
+          }
+          fread(par_table, PARTITION_BYTES, partitions, table);
+          side_channel_set_params(side_channel, length_table, table_type, side_chunk_size, par_table);
+          zfp_stream_set_side_channel(zfp, side_channel);
+          break;
+        case length:
+          fprintf(stderr,"lengths table decompression not supported in current version\n");
+          return EXIT_FAILURE;
+          break;
+        default :
+          fprintf(stderr,"non-valid decompression side channel information type specified\n");
+          return EXIT_FAILURE;
+          break;
+      }
+      if (ferror(table)) {
+        fprintf(stderr, "cannot read side channel information\n");
+        return EXIT_FAILURE;
+      }
+      zfp_stream_set_side_channel(zfp, side_channel);
+      fclose(table);
+    }
 
     /* associate bit stream with buffer */
     stream = stream_open(buffer, bufsize);
@@ -475,7 +546,7 @@ int main(int argc, char* argv[])
     case zfp_exec_omp:
       if (!zfp_stream_set_execution(zfp, exec) ||
           !zfp_stream_set_omp_threads(zfp, threads) ||
-          !zfp_stream_set_omp_chunk_size(zfp, chunk_size)) {
+          !zfp_stream_set_omp_chunk_size(zfp, omp_chunk_size)) {
         fprintf(stderr, "OpenMP execution not available\n");
         return EXIT_FAILURE;
       }
@@ -498,8 +569,10 @@ int main(int argc, char* argv[])
       return EXIT_FAILURE;
     }
     buffer = malloc(bufsize);
+    /* for CUDA compression, store the maximum size of the buffer needed */
+    zfp_stream_set_size(zfp, bufsize);
     if (!buffer) {
-      fprintf(stderr, "cannot allocate memory\n");
+      fprintf(stderr, "cannot allocate memory to compress to\n");
       return EXIT_FAILURE;
     }
 
@@ -510,6 +583,59 @@ int main(int argc, char* argv[])
       return EXIT_FAILURE;
     }
     zfp_stream_set_bit_stream(zfp, stream);
+
+    /* store block lengths in a table for fixed accuracy or precision headers */
+    if (exec == zfp_exec_omp) {
+      blocks = (size_t)((nx + 3)/4) * (size_t)((ny + 3)/4) * (size_t)((nz + 3)/4) * (size_t)((nw + 3)/4);
+      length_table_size = sizeof(uint16) * blocks;
+      length_table = malloc(length_table_size);
+      if (!length_table) {
+        fprintf(stderr, "cannot allocate memory for length table\n");
+        return EXIT_FAILURE;
+      }
+      if (table_type != none) {
+        switch(table_type) {
+          case offset:
+            if (!side_chunk_size) {
+              fprintf(stderr,"chunk size of 0 is not supported for offset table\n");
+              return EXIT_FAILURE;
+            }
+            chunks = (blocks + side_chunk_size - 1) / side_chunk_size;
+            par_table_size = chunks * sizeof(uint64);
+            par_table = malloc(par_table_size);
+            if (!par_table) {
+              fprintf(stderr, "cannot allocate memory for offset table\n");
+              return EXIT_FAILURE;
+            }
+            side_channel_set_params(side_channel, length_table, table_type, side_chunk_size, par_table);
+            zfp_stream_set_side_channel(zfp, side_channel);
+            break;
+          case hybrid:
+            chunks = (blocks + side_chunk_size - 1) / side_chunk_size;
+            partitions = (chunks + PARTITION_SIZE - 1) / PARTITION_SIZE;
+            par_table_size = partitions * PARTITION_BYTES;
+            par_table = malloc(par_table_size);
+            if (!par_table) {
+              fprintf(stderr, "cannot allocate memory for side-channel information\n");
+              return EXIT_FAILURE;
+            }
+            side_channel_set_params(side_channel, length_table, table_type, side_chunk_size, par_table);
+            zfp_stream_set_side_channel(zfp, side_channel);
+            break;
+          case length:
+            /* TODO: possibly allocate and fill a new length table based on data, e.g. 1 byte for 1D, or even more specific (7 - 12 bits based on precision and dimensionality) */
+            par_table_size = length_table_size;
+            par_table = length_table;
+            side_channel_set_params(side_channel, length_table, table_type, side_chunk_size, par_table);
+            zfp_stream_set_side_channel(zfp, side_channel);
+            break;
+          default :
+            fprintf(stderr,"non-valid compression side channel information type specified\n");
+            return EXIT_FAILURE;
+            break;
+        }
+      }
+    }
 
     /* optionally write header */
     if (header && !zfp_write_header(zfp, field, ZFP_HEADER_FULL)) {
@@ -531,11 +657,41 @@ int main(int argc, char* argv[])
         fprintf(stderr, "cannot create compressed file\n");
         return EXIT_FAILURE;
       }
+      /* write side channel information to separate file */
       if (fwrite(buffer, 1, zfpsize, file) != zfpsize) {
-        fprintf(stderr, "cannot write compressed file\n");
+        fprintf(stderr, "cannot write compressed data to file\n");
         return EXIT_FAILURE;
       }
       fclose(file);
+      
+      /* optionally write offset table */
+      if (table_type != none) {
+        FILE* table = fopen(tablepath, "wb");
+        /* write the offset table to the file */
+        if (table_type == offset) {
+          if (fwrite(par_table, sizeof(uint64), chunks, table) != chunks) {
+            fprintf(stderr, "cannot write offset table to file\n");
+            return EXIT_FAILURE;
+          }
+        }
+        else if (table_type == hybrid) {
+          if (fwrite(par_table, PARTITION_BYTES, partitions, table) != partitions) {
+            fprintf(stderr, "cannot write hybrid table to file\n");
+            return EXIT_FAILURE;
+          }
+        }
+        else if (table_type == length) {
+          if (fwrite(length_table, sizeof(uint16), blocks, table) != blocks) {
+            fprintf(stderr, "cannot write length table to file\n");
+            return EXIT_FAILURE;
+          }
+        }
+        else {
+          fprintf(stderr, "table type unknown\n");
+          return EXIT_FAILURE;
+        }
+        fclose(table);
+      }
     }
   }
 
@@ -571,14 +727,15 @@ int main(int argc, char* argv[])
     rawsize = typesize * count;
     fo = malloc(rawsize);
     if (!fo) {
-      fprintf(stderr, "cannot allocate memory\n");
+      fprintf(stderr, "cannot allocate memory for decompressed data\n");
       return EXIT_FAILURE;
     }
     zfp_field_set_pointer(field, fo);
 
     /* decompress data */
     while (!zfp_decompress(zfp, field)) {
-      /* fall back on serial decompression if execution policy not supported */
+      /* fall back on serial decompression if execution policy not supported
+         TODO: look into removing this exception as all modes are now supported */
       if (inpath && zfp_stream_execution(zfp) != zfp_exec_serial) {
         if (!zfp_stream_set_execution(zfp, zfp_exec_serial)) {
           fprintf(stderr, "cannot change execution policy\n");
@@ -610,7 +767,9 @@ int main(int argc, char* argv[])
   if (!quiet) {
     const char* type_name[] = { "int32", "int64", "float", "double" };
     fprintf(stderr, "type=%s nx=%u ny=%u nz=%u nw=%u", type_name[type - zfp_type_int32], nx, ny, nz, nw);
-    fprintf(stderr, " raw=%lu zfp=%lu ratio=%.3g rate=%.4g", (unsigned long)rawsize, (unsigned long)zfpsize, (double)rawsize / zfpsize, CHAR_BIT * (double)zfpsize / count);
+    fprintf(stderr, " raw=%lu zfp=%lu ratio=%.3g rate=%.4g\n", (unsigned long)rawsize, (unsigned long)zfpsize, (double)rawsize / zfpsize, CHAR_BIT * (double)zfpsize / count);
+    fprintf(stderr, "header_size=%lu overhead_percentage=%.5g ratio after header=%.3g", (unsigned long)par_table_size, (double)par_table_size / (double)zfpsize * 100, (double)rawsize / (zfpsize + par_table_size));
+//    fprintf(stderr, "%.3g,", (double)rawsize / zfpsize);
     if (stats)
       print_error(fi, fo, type, count);
     fprintf(stderr, "\n");
@@ -620,9 +779,14 @@ int main(int argc, char* argv[])
   zfp_field_free(field);
   zfp_stream_close(zfp);
   stream_close(stream);
+  free_side_channel(side_channel);
   free(buffer);
   free(fi);
   free(fo);
+  if(length_table)
+    free(length_table);
+  if(par_table)
+    free(par_table);
 
   return EXIT_SUCCESS;
 }

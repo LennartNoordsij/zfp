@@ -112,6 +112,10 @@
 #define ZFP_HEADER_MAX_BITS 148 /* max number of header bits */
 #define ZFP_MODE_SHORT_MAX  ((1u << ZFP_MODE_SHORT_BITS) - 2)
 
+/* partition size */
+#define PARTITION_SIZE 32
+#define PARTITION_BYTES 72
+
 /* types ------------------------------------------------------------------- */
 
 /* execution policy */
@@ -129,13 +133,29 @@ typedef struct {
 
 /* execution parameters */
 typedef union {
-  zfp_exec_params_omp omp; /* OpenMP parameters */
+  zfp_exec_params_omp omp;   /* OpenMP parameters */
 } zfp_exec_params;
 
 typedef struct {
   zfp_exec_policy policy; /* execution policy (serial, omp, ...) */
   zfp_exec_params params; /* execution parameters */
 } zfp_execution;
+
+/* side channel information type */
+typedef enum {
+  none = 0,   /* no side channel info (default) */
+  offset = 1, /* offset table (OMP and CUDA decompression) */
+  hybrid = 2, /* offset-length hybrid table (CUDA decompression only) */
+  length = 3  /* length table (currently not supported in decompression) */
+} side_channel_type;
+
+/* Side channel information for parallel decompression */
+typedef struct {
+  uint16* length_table;     /* table with the block lengths */
+  side_channel_type type;   /* type of side channel information */
+  uint chunk_size;          /* number of blocks per chunk */
+  void * side_channel_data; /* side channel information */
+} zfp_side_channel;
 
 /* compressed stream; use accessors to get/set members */
 typedef struct {
@@ -145,6 +165,8 @@ typedef struct {
   int minexp;         /* minimum floating point bit plane number to store */
   bitstream* stream;  /* compressed bit stream */
   zfp_execution exec; /* execution policy and parameters */
+  size_t size;        /* size of the compressed stream buffer */
+  zfp_side_channel* side_channel; /* side channel information for parallel decompression */
 } zfp_stream;
 
 /* compression mode */
@@ -172,6 +194,7 @@ typedef struct {
   int sx, sy, sz, sw;  /* strides (zero for contiguous array a[nw][nz][ny][nx]) */
   void* data;          /* pointer to array data */
 } zfp_field;
+
 
 #ifdef __cplusplus
 extern "C" {
@@ -256,6 +279,13 @@ zfp_stream_set_bit_stream(
   bitstream* bs       /* bit stream to read from and write to */
 );
 
+/* set size of buffer for compressed data */
+void
+zfp_stream_set_size(
+  zfp_stream* zfp,   /* compressed stream */
+  size_t size        /* size of the buffer */
+);
+
 /* set size in compressed bits/scalar (fixed-rate mode) */
 double                /* actual rate in compressed bits/scalar */
 zfp_stream_set_rate(
@@ -297,6 +327,33 @@ zfp_stream_set_params(
   uint maxprec,       /* maximum precision (# bit planes coded) */
   int minexp          /* minimum base-2 exponent; error <= 2^minexp */
 );
+
+/* allocate the side channel information */
+zfp_side_channel*
+side_channel_alloc();
+
+/* set the side channel information */
+int
+side_channel_set_params(
+  zfp_side_channel* side_channel,
+  uint16 * length_table,
+  side_channel_type type,
+  uint chunk_size,
+  void * side_channel_data
+);
+
+/* set the side channel information in the stream */
+void
+zfp_stream_set_side_channel(
+  zfp_stream* zfp,
+  zfp_side_channel* side_channel
+);
+
+void
+free_side_channel(
+  zfp_side_channel* side_channel
+);
+
 
 /* high-level API: execution policy ---------------------------------------- */
 
