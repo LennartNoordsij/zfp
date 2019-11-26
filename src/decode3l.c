@@ -10,5 +10,3 @@
 #include "template/decode.c"
 #include "template/decodei.c"
 #include "template/decode3.c"
-#include "template/revdecode.c"
-#include "template/revdecode3.c"

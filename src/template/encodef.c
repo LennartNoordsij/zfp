@@ -1,8 +1,6 @@
 #include <limits.h>
 #include <math.h>
 
-static uint _t2(rev_encode_block, Scalar, DIMS)(zfp_stream* zfp, const Scalar* fblock);
-
 /* private functions ------------------------------------------------------- */
 
 /* return normalized floating-point exponent for x >= 0 */
@@ -50,11 +48,12 @@ _t1(fwd_cast, Scalar)(Int* iblock, const Scalar* fblock, uint n, int emax)
   while (--n);
 }
 
-/* encode contiguous floating-point block using lossy algorithm */
-static uint
-_t2(encode_block, Scalar, DIMS)(zfp_stream* zfp, const Scalar* fblock)
+/* public functions -------------------------------------------------------- */
+
+/* encode contiguous floating-point block */
+uint
+_t2(zfp_encode_block, Scalar, DIMS)(zfp_stream* zfp, const Scalar* fblock)
 {
-  uint bits = 1;
   /* compute maximum exponent */
   int emax = _t1(exponent_block, Scalar)(fblock, BLOCK_SIZE);
   int maxprec = precision(emax, zfp->maxprec, zfp->minexp, DIMS);
@@ -63,29 +62,21 @@ _t2(encode_block, Scalar, DIMS)(zfp_stream* zfp, const Scalar* fblock)
   if (e) {
     cache_align_(Int iblock[BLOCK_SIZE]);
     /* encode common exponent; LSB indicates that exponent is nonzero */
-    bits += EBITS;
-    stream_write_bits(zfp->stream, 2 * e + 1, bits);
+    int ebits = EBITS + 1;
+    stream_write_bits(zfp->stream, 2 * e + 1, ebits);
     /* perform forward block-floating-point transform */
     _t1(fwd_cast, Scalar)(iblock, fblock, BLOCK_SIZE, emax);
     /* encode integer block */
-    bits += _t2(encode_block, Int, DIMS)(zfp->stream, zfp->minbits - bits, zfp->maxbits - bits, maxprec, iblock);
+    return ebits + _t2(encode_block, Int, DIMS)(zfp->stream, zfp->minbits - ebits, zfp->maxbits - ebits, maxprec, iblock);
   }
   else {
     /* write single zero-bit to indicate that all values are zero */
     stream_write_bit(zfp->stream, 0);
-    if (zfp->minbits > bits) {
-      stream_pad(zfp->stream, zfp->minbits - bits);
-      bits = zfp->minbits;
+    if (zfp->minbits > 1) {
+      stream_pad(zfp->stream, zfp->minbits - 1);
+      return zfp->minbits;
     }
+    else
+      return 1;
   }
-  return bits;
-}
-
-/* public functions -------------------------------------------------------- */
-
-/* encode contiguous floating-point block */
-uint
-_t2(zfp_encode_block, Scalar, DIMS)(zfp_stream* zfp, const Scalar* fblock)
-{
-  return REVERSIBLE(zfp) ? _t2(rev_encode_block, Scalar, DIMS)(zfp, fblock) : _t2(encode_block, Scalar, DIMS)(zfp, fblock);
 }

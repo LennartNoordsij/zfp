@@ -2,12 +2,12 @@
 #define CUZFP_SHARED_H
 
 //#define CUDA_ZFP_RATE_PRINT 1
+
 typedef unsigned long long Word;
 #define Wsize ((uint)(CHAR_BIT * sizeof(Word)))
 
 #include "type_info.cuh"
 #include "zfp.h"
-#include "constants.h"
 #include <stdio.h>
 
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
@@ -17,6 +17,10 @@ typedef unsigned long long Word;
 #define LDEXP(x, e) ldexp(x, e)
 
 #define NBMASK 0xaaaaaaaaaaaaaaaaull
+
+__constant__ unsigned char c_perm_1[4];
+__constant__ unsigned char c_perm_2[16];
+__constant__ unsigned char c_perm[64];
 
 namespace cuZFP
 {
@@ -97,7 +101,8 @@ dim3 get_max_grid_dims()
 // size is assumed to have a pad to the nearest cuda block size
 dim3 calculate_grid_size(size_t size, size_t cuda_block_size)
 {
-  size_t grids = size / cuda_block_size; // because of pad this will be exact
+  /* always divisible due to padding */
+  size_t grids = size / cuda_block_size;
   dim3 max_grid_dims = get_max_grid_dims();
   int dims  = 1;
   // check to see if we need to add more grids
@@ -242,28 +247,28 @@ inv_lift(Int* p)
 
 
 template<int BlockSize>
-__device__ inline
-const unsigned char* get_perm();
+__device__
+unsigned char* get_perm();
 
 template<>
-__device__ inline
-const unsigned char* get_perm<64>()
+__device__
+unsigned char* get_perm<64>()
 {
-  return perm_3d;
+  return c_perm;
 }
 
 template<>
-__device__ inline
-const unsigned char* get_perm<16>()
+__device__
+unsigned char* get_perm<16>()
 {
-  return perm_2;
+  return c_perm_2;
 }
 
 template<>
-__device__ inline
-const unsigned char* get_perm<4>()
+__device__
+unsigned char* get_perm<4>()
 {
-  return perm_1;
+  return c_perm_1;
 }
 
 

@@ -18,6 +18,7 @@ set(cuZFP_sources
     type_info.cuh)
 
 set(cuZFP_headers
+    constant_setup.cuh
     shared.h
     cuZFP.h
     ErrorCheck.h)

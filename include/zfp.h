@@ -1,7 +1,7 @@
 /*
-** Copyright (c) 2014-2019, Lawrence Livermore National Security, LLC.
+** Copyright (c) 2014-2018, Lawrence Livermore National Security, LLC.
 ** Produced at the Lawrence Livermore National Laboratory.
-** Authors: Peter Lindstrom, Markus Salasoo, Matt Larsen, Stephen Herbein.
+** Authors: Peter Lindstrom, Markus Salasoo, Matt Larsen.
 ** LLNL-CODE-663824.
 ** All rights reserved.
 **
@@ -74,7 +74,7 @@
 /* library version information */
 #define ZFP_VERSION_MAJOR 0 /* library major version number */
 #define ZFP_VERSION_MINOR 5 /* library minor version number */
-#define ZFP_VERSION_PATCH 5 /* library patch version number */
+#define ZFP_VERSION_PATCH 4 /* library patch version number */
 #define ZFP_VERSION_RELEASE ZFP_VERSION_PATCH
 
 /* codec version number (see also zfp_codec_version) */
@@ -94,7 +94,7 @@
 
 /* default compression parameters */
 #define ZFP_MIN_BITS     1 /* minimum number of bits per block */
-#define ZFP_MAX_BITS 16657 /* maximum number of bits per block */
+#define ZFP_MAX_BITS 16651 /* maximum number of bits per block */
 #define ZFP_MAX_PREC    64 /* maximum precision supported */
 #define ZFP_MIN_EXP  -1074 /* minimum floating-point base-2 exponent */
 
@@ -104,9 +104,6 @@
 #define ZFP_HEADER_MODE   0x4u /* embed 12- or 64-bit compression mode */
 #define ZFP_HEADER_FULL   0x7u /* embed all of the above */
 
-/* field metadata indeterminate state and error code */
-#define ZFP_META_NULL (UINT64C(-1))
-
 /* number of bits per header entry */
 #define ZFP_MAGIC_BITS       32 /* number of magic word bits */
 #define ZFP_META_BITS        52 /* number of field metadata bits */
@@ -114,6 +111,10 @@
 #define ZFP_MODE_LONG_BITS   64 /* number of mode bits in long format */
 #define ZFP_HEADER_MAX_BITS 148 /* max number of header bits */
 #define ZFP_MODE_SHORT_MAX  ((1u << ZFP_MODE_SHORT_BITS) - 2)
+
+/* partition size */
+#define PARTITION_SIZE 32
+#define PARTITION_BYTES 72
 
 /* types ------------------------------------------------------------------- */
 
@@ -132,13 +133,29 @@ typedef struct {
 
 /* execution parameters */
 typedef union {
-  zfp_exec_params_omp omp; /* OpenMP parameters */
+  zfp_exec_params_omp omp;   /* OpenMP parameters */
 } zfp_exec_params;
 
 typedef struct {
   zfp_exec_policy policy; /* execution policy (serial, omp, ...) */
   zfp_exec_params params; /* execution parameters */
 } zfp_execution;
+
+/* side channel information type */
+typedef enum {
+  none = 0,   /* no side channel info (default) */
+  offset = 1, /* offset table (OMP and CUDA decompression) */
+  hybrid = 2, /* offset-length hybrid table (CUDA decompression only) */
+  length = 3  /* length table (currently not supported in decompression) */
+} side_channel_type;
+
+/* Side channel information for parallel decompression */
+typedef struct {
+  uint16* length_table;     /* table with the block lengths */
+  side_channel_type type;   /* type of side channel information */
+  uint chunk_size;          /* number of blocks per chunk */
+  void * side_channel_data; /* side channel information */
+} zfp_side_channel;
 
 /* compressed stream; use accessors to get/set members */
 typedef struct {
@@ -148,6 +165,8 @@ typedef struct {
   int minexp;         /* minimum floating point bit plane number to store */
   bitstream* stream;  /* compressed bit stream */
   zfp_execution exec; /* execution policy and parameters */
+  size_t size;        /* size of the compressed stream buffer */
+  zfp_side_channel* side_channel; /* side channel information for parallel decompression */
 } zfp_stream;
 
 /* compression mode */
@@ -156,8 +175,7 @@ typedef enum {
   zfp_mode_expert          = 1, /* expert mode (4 params set manually) */
   zfp_mode_fixed_rate      = 2, /* fixed rate mode */
   zfp_mode_fixed_precision = 3, /* fixed precision mode */
-  zfp_mode_fixed_accuracy  = 4, /* fixed accuracy mode */
-  zfp_mode_reversible      = 5  /* reversible (lossless) mode */
+  zfp_mode_fixed_accuracy  = 4  /* fixed accuracy mode */
 } zfp_mode;
 
 /* scalar type */
@@ -176,6 +194,7 @@ typedef struct {
   int sx, sy, sz, sw;  /* strides (zero for contiguous array a[nw][nz][ny][nx]) */
   void* data;          /* pointer to array data */
 } zfp_field;
+
 
 #ifdef __cplusplus
 extern "C" {
@@ -217,15 +236,15 @@ zfp_stream_bit_stream(
 );
 
 /* returns enum of compression mode */
-zfp_mode                   /* enum for compression mode */
+zfp_mode                     /* enum for compression mode */
 zfp_stream_compression_mode(
-  const zfp_stream* stream /* compressed stream */
+  const zfp_stream* zfp      /* compressed stream */
 );
 
 /* get all compression parameters in a compact representation */
 uint64                     /* 12- or 64-bit encoding of parameters */
 zfp_stream_mode(
-  const zfp_stream* stream /* compressed stream */
+  const zfp_stream* zfp    /* compressed stream */
 );
 
 /* get all compression parameters (pointers may be NULL) */
@@ -253,12 +272,6 @@ zfp_stream_maximum_size(
 
 /* high-level API: initialization of compressed stream parameters ---------- */
 
-/* rewind bit stream to beginning for compression or decompression */
-void
-zfp_stream_rewind(
-  zfp_stream* stream /* compressed bit stream */
-);
-
 /* associate bit stream with compressed stream */
 void
 zfp_stream_set_bit_stream(
@@ -266,10 +279,11 @@ zfp_stream_set_bit_stream(
   bitstream* bs       /* bit stream to read from and write to */
 );
 
-/* enable reversible (lossless) compression */
+/* set size of buffer for compressed data */
 void
-zfp_stream_set_reversible(
-  zfp_stream* stream /* compressed stream */
+zfp_stream_set_size(
+  zfp_stream* zfp,   /* compressed stream */
+  size_t size        /* size of the buffer */
 );
 
 /* set size in compressed bits/scalar (fixed-rate mode) */
@@ -278,7 +292,7 @@ zfp_stream_set_rate(
   zfp_stream* stream, /* compressed stream */
   double rate,        /* desired rate in compressed bits/scalar */
   zfp_type type,      /* scalar type to compress */
-  uint dims,          /* array dimensionality (1, 2, 3, or 4) */
+  uint dims,          /* array dimensionality (1, 2, or 3) */
   int wra             /* nonzero if write random access is needed */
 );
 
@@ -296,14 +310,15 @@ zfp_stream_set_accuracy(
   double tolerance    /* desired error tolerance */
 );
 
-/* set parameters from compact encoding; leaves stream intact on failure */
-zfp_mode              /* compression mode or zfp_mode_null upon failure */
+/* set all compression parameters from compact representation */
+/* compression params are only set on stream upon success */
+zfp_mode              /* non (zfp_mode_null) upon success */
 zfp_stream_set_mode(
   zfp_stream* stream, /* compressed stream */
   uint64 mode         /* 12- or 64-bit encoding of parameters */
 );
 
-/* set all parameters (expert mode); leaves stream intact on failure */
+/* set all compression parameters (expert mode) */
 int                   /* nonzero upon success */
 zfp_stream_set_params(
   zfp_stream* stream, /* compressed stream */
@@ -312,6 +327,33 @@ zfp_stream_set_params(
   uint maxprec,       /* maximum precision (# bit planes coded) */
   int minexp          /* minimum base-2 exponent; error <= 2^minexp */
 );
+
+/* allocate the side channel information */
+zfp_side_channel*
+side_channel_alloc();
+
+/* set the side channel information */
+int
+side_channel_set_params(
+  zfp_side_channel* side_channel,
+  uint16 * length_table,
+  side_channel_type type,
+  uint chunk_size,
+  void * side_channel_data
+);
+
+/* set the side channel information in the stream */
+void
+zfp_stream_set_side_channel(
+  zfp_stream* zfp,
+  zfp_side_channel* side_channel
+);
+
+void
+free_side_channel(
+  zfp_side_channel* side_channel
+);
+
 
 /* high-level API: execution policy ---------------------------------------- */
 
@@ -584,6 +626,12 @@ zfp_stream_flush(
 /* align bit stream on next word boundary (decoding analogy to flush) */
 size_t
 zfp_stream_align(
+  zfp_stream* stream /* compressed bit stream */
+);
+
+/* rewind bit stream to beginning for compression or decompression */
+void
+zfp_stream_rewind(
   zfp_stream* stream /* compressed bit stream */
 );
 

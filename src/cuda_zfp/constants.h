@@ -5,7 +5,7 @@ namespace cuZFP {
 
 #define index_3d(x, y, z) ((x) + 4 * ((y) + 4 * (z)))
 
-__device__ static const unsigned char
+static const unsigned char
 perm_3d[64] = {
 	index_3d(0, 0, 0), //  0 : 0
 
@@ -94,7 +94,7 @@ perm_3d[64] = {
 
 #undef index_3d
 
-__device__ static const unsigned char perm_1[4] =
+static const unsigned char perm_1[4] = 
 {
   0, 1, 2, 3
 };
@@ -102,7 +102,7 @@ __device__ static const unsigned char perm_1[4] =
 #define index(i, j) ((i) + 4 * (j))
 
 /* order coefficients (i, j) by i + j, then i^2 + j^2 */
-__device__ static const unsigned char perm_2[16] = {
+static const unsigned char perm_2[16] = {
   index(0, 0), /*  0 : 0 */
 
   index(1, 0), /*  1 : 1 */

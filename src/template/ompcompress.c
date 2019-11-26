@@ -6,20 +6,19 @@ _t2(compress_omp, Scalar, 1)(zfp_stream* stream, const zfp_field* field)
 {
   /* array metadata */
   const Scalar* data = (const Scalar*)field->data;
+  uint16 * length_table = stream->side_channel->length_table;
   uint nx = field->nx;
 
   /* number of omp threads, blocks, and chunks */
   uint threads = thread_count_omp(stream);
   uint blocks = (nx + 3) / 4;
   uint chunks = chunk_count_omp(stream, blocks, threads);
-  int chunk;
 
   /* allocate per-thread streams */
   bitstream** bs = compress_init_par(stream, field, chunks, blocks);
-  if (!bs)
-    return;
 
   /* compress chunks of blocks in parallel */
+  int chunk;
   #pragma omp parallel for num_threads(threads)
   for (chunk = 0; chunk < (int)chunks; chunk++) {
     /* determine range of block indices assigned to this thread */
@@ -37,12 +36,13 @@ _t2(compress_omp, Scalar, 1)(zfp_stream* stream, const zfp_field* field)
       p += x;
       /* compress partial or full block */
       if (nx - x < 4)
-        _t2(zfp_encode_partial_block_strided, Scalar, 1)(&s, p, MIN(nx - x, 4u), 1);
+        length_table[block] = _t2(zfp_encode_partial_block_strided, Scalar, 1)(&s, p, MIN(nx - x, 4u), 1);
       else
-        _t2(zfp_encode_block, Scalar, 1)(&s, p);
+        length_table[block] = _t2(zfp_encode_block, Scalar, 1)(&s, p);
     }
   }
 
+  encode_side_channel(stream, blocks);
   /* concatenate per-thread streams */
   compress_finish_par(stream, bs, chunks);
 }
@@ -53,6 +53,7 @@ _t2(compress_strided_omp, Scalar, 1)(zfp_stream* stream, const zfp_field* field)
 {
   /* array metadata */
   const Scalar* data = (const Scalar*)field->data;
+  uint16 * length_table = stream->side_channel->length_table;
   uint nx = field->nx;
   int sx = field->sx ? field->sx : 1;
 
@@ -60,14 +61,12 @@ _t2(compress_strided_omp, Scalar, 1)(zfp_stream* stream, const zfp_field* field)
   uint threads = thread_count_omp(stream);
   uint blocks = (nx + 3) / 4;
   uint chunks = chunk_count_omp(stream, blocks, threads);
-  int chunk;
 
   /* allocate per-thread streams */
   bitstream** bs = compress_init_par(stream, field, chunks, blocks);
-  if (!bs)
-    return;
 
   /* compress chunks of blocks in parallel */
+  int chunk;
   #pragma omp parallel for num_threads(threads)
   for (chunk = 0; chunk < (int)chunks; chunk++) {
     /* determine range of block indices assigned to this thread */
@@ -85,12 +84,13 @@ _t2(compress_strided_omp, Scalar, 1)(zfp_stream* stream, const zfp_field* field)
       p += sx * (ptrdiff_t)x;
       /* compress partial or full block */
       if (nx - x < 4)
-        _t2(zfp_encode_partial_block_strided, Scalar, 1)(&s, p, MIN(nx - x, 4u), sx);
+        length_table[block] = _t2(zfp_encode_partial_block_strided, Scalar, 1)(&s, p, MIN(nx - x, 4u), sx);
       else
-        _t2(zfp_encode_block_strided, Scalar, 1)(&s, p, sx);
+        length_table[block] = _t2(zfp_encode_block_strided, Scalar, 1)(&s, p, sx);
     }
   }
 
+  encode_side_channel(stream, blocks);
   /* concatenate per-thread streams */
   compress_finish_par(stream, bs, chunks);
 }
@@ -101,10 +101,11 @@ _t2(compress_strided_omp, Scalar, 2)(zfp_stream* stream, const zfp_field* field)
 {
   /* array metadata */
   const Scalar* data = (const Scalar*)field->data;
+  uint16 * length_table = stream->side_channel->length_table;
   uint nx = field->nx;
   uint ny = field->ny;
   int sx = field->sx ? field->sx : 1;
-  int sy = field->sy ? field->sy : (int)nx;
+  int sy = field->sy ? field->sy : nx;
 
   /* number of omp threads, blocks, and chunks */
   uint threads = thread_count_omp(stream);
@@ -112,14 +113,12 @@ _t2(compress_strided_omp, Scalar, 2)(zfp_stream* stream, const zfp_field* field)
   uint by = (ny + 3) / 4;
   uint blocks = bx * by;
   uint chunks = chunk_count_omp(stream, blocks, threads);
-  int chunk;
 
   /* allocate per-thread streams */
   bitstream** bs = compress_init_par(stream, field, chunks, blocks);
-  if (!bs)
-    return;
 
   /* compress chunks of blocks in parallel */
+  int chunk;
   #pragma omp parallel for num_threads(threads)
   for (chunk = 0; chunk < (int)chunks; chunk++) {
     /* determine range of block indices assigned to this thread */
@@ -140,12 +139,13 @@ _t2(compress_strided_omp, Scalar, 2)(zfp_stream* stream, const zfp_field* field)
       p += sx * (ptrdiff_t)x + sy * (ptrdiff_t)y;
       /* compress partial or full block */
       if (nx - x < 4 || ny - y < 4)
-        _t2(zfp_encode_partial_block_strided, Scalar, 2)(&s, p, MIN(nx - x, 4u), MIN(ny - y, 4u), sx, sy);
+        length_table[block] = _t2(zfp_encode_partial_block_strided, Scalar, 2)(&s, p, MIN(nx - x, 4u), MIN(ny - y, 4u), sx, sy);
       else
-        _t2(zfp_encode_block_strided, Scalar, 2)(&s, p, sx, sy);
+        length_table[block] = _t2(zfp_encode_block_strided, Scalar, 2)(&s, p, sx, sy);
     }
   }
 
+  encode_side_channel(stream, blocks);
   /* concatenate per-thread streams */
   compress_finish_par(stream, bs, chunks);
 }
@@ -156,12 +156,13 @@ _t2(compress_strided_omp, Scalar, 3)(zfp_stream* stream, const zfp_field* field)
 {
   /* array metadata */
   const Scalar* data = (const Scalar*)field->data;
+  uint16 * length_table = stream->side_channel->length_table;
   uint nx = field->nx;
   uint ny = field->ny;
   uint nz = field->nz;
   int sx = field->sx ? field->sx : 1;
-  int sy = field->sy ? field->sy : (int)nx;
-  int sz = field->sz ? field->sz : (int)(nx * ny);
+  int sy = field->sy ? field->sy : nx;
+  int sz = field->sz ? field->sz : (ptrdiff_t)nx * ny;
 
   /* number of omp threads, blocks, and chunks */
   uint threads = thread_count_omp(stream);
@@ -170,14 +171,12 @@ _t2(compress_strided_omp, Scalar, 3)(zfp_stream* stream, const zfp_field* field)
   uint bz = (nz + 3) / 4;
   uint blocks = bx * by * bz;
   uint chunks = chunk_count_omp(stream, blocks, threads);
-  int chunk;
 
   /* allocate per-thread streams */
   bitstream** bs = compress_init_par(stream, field, chunks, blocks);
-  if (!bs)
-    return;
 
   /* compress chunks of blocks in parallel */
+  int chunk;
   #pragma omp parallel for num_threads(threads)
   for (chunk = 0; chunk < (int)chunks; chunk++) {
     /* determine range of block indices assigned to this thread */
@@ -199,12 +198,13 @@ _t2(compress_strided_omp, Scalar, 3)(zfp_stream* stream, const zfp_field* field)
       p += sx * (ptrdiff_t)x + sy * (ptrdiff_t)y + sz * (ptrdiff_t)z;
       /* compress partial or full block */
       if (nx - x < 4 || ny - y < 4 || nz - z < 4)
-        _t2(zfp_encode_partial_block_strided, Scalar, 3)(&s, p, MIN(nx - x, 4u), MIN(ny - y, 4u), MIN(nz - z, 4u), sx, sy, sz);
+        length_table[block] = _t2(zfp_encode_partial_block_strided, Scalar, 3)(&s, p, MIN(nx - x, 4u), MIN(ny - y, 4u), MIN(nz - z, 4u), sx, sy, sz);
       else
-        _t2(zfp_encode_block_strided, Scalar, 3)(&s, p, sx, sy, sz);
+        length_table[block] = _t2(zfp_encode_block_strided, Scalar, 3)(&s, p, sx, sy, sz);
     }
   }
 
+  encode_side_channel(stream, blocks);
   /* concatenate per-thread streams */
   compress_finish_par(stream, bs, chunks);
 }
@@ -215,14 +215,15 @@ _t2(compress_strided_omp, Scalar, 4)(zfp_stream* stream, const zfp_field* field)
 {
   /* array metadata */
   const Scalar* data = field->data;
+  uint16 * length_table = stream->side_channel->length_table;
   uint nx = field->nx;
   uint ny = field->ny;
   uint nz = field->nz;
   uint nw = field->nw;
   int sx = field->sx ? field->sx : 1;
-  int sy = field->sy ? field->sy : (int)nx;
-  int sz = field->sz ? field->sz : (int)(nx * ny);
-  int sw = field->sw ? field->sw : (int)(nx * ny * nz);
+  int sy = field->sy ? field->sy : nx;
+  int sz = field->sz ? field->sz : (ptrdiff_t)nx * ny;
+  int sw = field->sw ? field->sw : (ptrdiff_t)nx * ny * nz;
 
   /* number of omp threads, blocks, and chunks */
   uint threads = thread_count_omp(stream);
@@ -232,14 +233,12 @@ _t2(compress_strided_omp, Scalar, 4)(zfp_stream* stream, const zfp_field* field)
   uint bw = (nw + 3) / 4;
   uint blocks = bx * by * bz * bw;
   uint chunks = chunk_count_omp(stream, blocks, threads);
-  int chunk;
 
   /* allocate per-thread streams */
   bitstream** bs = compress_init_par(stream, field, chunks, blocks);
-  if (!bs)
-    return;
 
   /* compress chunks of blocks in parallel */
+  int chunk;
   #pragma omp parallel for num_threads(threads)
   for (chunk = 0; chunk < (int)chunks; chunk++) {
     /* determine range of block indices assigned to this thread */
@@ -262,12 +261,13 @@ _t2(compress_strided_omp, Scalar, 4)(zfp_stream* stream, const zfp_field* field)
       p += sx * (ptrdiff_t)x + sy * (ptrdiff_t)y + sz * (ptrdiff_t)z + sw * (ptrdiff_t)w;
       /* compress partial or full block */
       if (nx - x < 4 || ny - y < 4 || nz - z < 4 || nw - w < 4)
-        _t2(zfp_encode_partial_block_strided, Scalar, 4)(&s, p, MIN(nx - x, 4u), MIN(ny - y, 4u), MIN(nz - z, 4u), MIN(nw - w, 4u), sx, sy, sz, sw);
+        length_table[block] = _t2(zfp_encode_partial_block_strided, Scalar, 4)(&s, p, MIN(nx - x, 4u), MIN(ny - y, 4u), MIN(nz - z, 4u), MIN(nw - w, 4u), sx, sy, sz, sw);
       else
-        _t2(zfp_encode_block_strided, Scalar, 4)(&s, p, sx, sy, sz, sw);
+        length_table[block] = _t2(zfp_encode_block_strided, Scalar, 4)(&s, p, sx, sy, sz, sw);
     }
   }
 
+  encode_side_channel(stream, blocks);
   /* concatenate per-thread streams */
   compress_finish_par(stream, bs, chunks);
 }
