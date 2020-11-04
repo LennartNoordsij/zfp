@@ -450,18 +450,26 @@ the array :code:`a` clearly must be mutable to allow assignment to
 :cpp:class:`array::reference`.  The value associated with the read access
 is obtained via an implicit conversion.
 
-Array dimensions *nx*, *ny*, and *nz* can be queried using these functions::
+When the array is const qualified, the operators :code:`[]` and :code:`()`
+are inspectors that return a proxy :ref:`const reference <references>` that
+implicitly converts to a value.  If used as arguments in :code:`printf` or
+other functions that take a variable number of arguments, implicit conversion
+is not done and the reference has to be explicitly cast to value, e.g.,
+:code:`printf("%f", (double)a[i]);`.
 
-  size_t size(); // total number of elements nx * ny * nz
-  uint size_x(); // nx
-  uint size_y(); // ny
-  uint size_z(); // nz
+Array dimensions *nx*, *ny*, *nz*, and *nw* can be queried using these functions::
+
+  size_t size(); // total number of elements nx * ny * nz * nw
+  size_t size_x(); // nx
+  size_t size_y(); // ny
+  size_t size_z(); // nz
+  size_t size_w(); // nw
 
 The array dimensions can also be changed dynamically, e.g., if not known
 at time of construction, using
 ::
 
-  void resize(uint nx, uint ny, uint nz, bool clear = true);
+  void resize(size_t nx, size_t ny, size_t nz, size_t nw, bool clear = true);
 
 When *clear* = true, the array is explicitly zeroed.  In either case, all
 previous contents of the array are lost.  If *nx* = *ny* = *nz* = 0, all
@@ -557,9 +565,12 @@ references.
 The following table shows the equivalent zfp type to standard types when
 working with 1D arrays::
 
-  double&                         zfp::array1d::reference
-  double*                         zfp::array1d::pointer
-  std::vector<double>::iterator   zfp::array1d::iterator
+  double&                               zfp::array1d::reference
+  double*                               zfp::array1d::pointer
+  std::vector<double>::iterator         zfp::array1d::iterator
+  const double&                         zfp::array1d::const_reference
+  const double*                         zfp::array1d::const_pointer
+  std::vector<double>::const_iterator   zfp::array1d::const_iterator
 
 .. _tut-caching:
 
