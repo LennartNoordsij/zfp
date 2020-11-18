@@ -61,6 +61,10 @@
 #define ZFP_HEADER_MAX_BITS 148 /* max number of header bits */
 #define ZFP_MODE_SHORT_MAX  ((1u << ZFP_MODE_SHORT_BITS) - 2)
 
+/* index constants */
+/* TODO: decide if we want to have this constant or adjustable, and how */
+#define PARTITION_SIZE  32  /* number of blocks in a partition for hybrid index */
+
 /* types ------------------------------------------------------------------- */
 
 /* Boolean constants */
@@ -83,6 +87,7 @@ typedef enum {
   zfp_index_none = 0,   /* no index */
   zfp_index_offset = 1, /* offsets (OMP and CUDA decompression) */
   zfp_index_length = 2, /* lengths */
+  zfp_index_hybrid = 3  /* hyrbid (CUDA decomrpession) */
 } zfp_index_type;
 
 /* OpenMP execution parameters */
@@ -106,6 +111,7 @@ typedef struct {
   zfp_index_type type; /* zfp_index_none if no index */
   void* data;          /* NULL if no index */
   size_t size;         /* byte size of data (0 if no index) */
+  uint granularity;    /* Granularity of the index */
 } zfp_index;
 
 /* compressed stream; use accessors to get/set members */
@@ -303,8 +309,9 @@ zfp_index_create();
 /* set the size of the index */
 void
 zfp_index_set_type(
-  zfp_index* index,    /* the index */
-  zfp_index_type type /* type of the index */
+  zfp_index* index,     /* the index */
+  zfp_index_type type,  /* type of the index */
+  uint granularity       /* granularity of the index */
 );
 
 /* set the data of the index */

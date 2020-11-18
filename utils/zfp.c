@@ -156,6 +156,7 @@ int main(int argc, char* argv[])
   int header = 0;
   int quiet = 0;
   int stats = 0;
+  uint index_granularity = 1;
   char* inpath = 0;
   char* zfppath = 0;
   char* outpath = 0;
@@ -313,6 +314,18 @@ int main(int argc, char* argv[])
           usage();
         }
         indexpath = argv[i];
+        break;
+      case 'n':
+        if (++i == argc)
+          usage();
+        if (sscanf(argv[i], "offset=%u", &index_granularity) == 1)
+          index_type = zfp_index_offset;
+        else if (!strcmp(argv[i], "length"))
+          index_type = zfp_index_length;
+        else if (sscanf(argv[i], "hybrid=%u", &index_granularity) == 1)
+          index_type = zfp_index_hybrid;
+        else
+          usage();
         break;
       case 'z':
         if (++i == argc)
@@ -545,8 +558,14 @@ int main(int argc, char* argv[])
     }
 
     /* optionally set the index type */
-    if (index_type) {
-      zfp_index_set_type(index, index_type);
+    if ((index_type != zfp_index_none) && index_granularity) {
+      /* TODO: decide what to do with this check */
+      if (index_type == zfp_index_hybrid) {
+        uint max_granularity = 10 - 2 * dims;
+        if (index_granularity >> max_granularity)
+          fprintf(stderr, "Warning: Granularity is too large for lengths in 16 bit datatype. This may lead to an incorrect index and errors in decompression\n");
+      }
+      zfp_index_set_type(index, index_type, index_granularity);
     }
 
     /* optionally set the index */
