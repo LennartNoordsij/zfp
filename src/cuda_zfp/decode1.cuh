@@ -153,7 +153,8 @@ size_t decode1launch(uint dim,
   rate /= 1024.f;
   rate /= 1024.f;
   rate /= 1024.f;
-  printf("%f", rate);
+  printf("Decode elapsed time: %.5f (s)\n", seconds);
+  printf("# decode1 rate: %.2f (GB / sec)\n", rate);
 #endif
   return stream_bytes;
 }
