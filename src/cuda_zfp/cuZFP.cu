@@ -213,7 +213,7 @@ Word *setup_device_stream(zfp_stream *stream,const zfp_field *field)
   } 
 
   Word *d_stream = NULL;
-  // TODO: we we have a real stream we can just ask it how big it is
+  size_t size = stream_capacity(stream->stream);
   size_t max_size = zfp_stream_maximum_size(stream, field);
   cudaMalloc(&d_stream, max_size);
   cudaMemcpy(d_stream, stream->stream->begin, max_size, cudaMemcpyHostToDevice);
