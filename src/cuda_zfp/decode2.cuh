@@ -134,8 +134,12 @@ size_t decode2launch(uint2 dims,
 
   /* Block size fixed to 32 in this version, needed for hybrid functionality */
   size_t cuda_block_size = 32;
-  /* TODO: remove nonzero stream_bytes requirement */
-  size_t stream_bytes = 1;
+  size_t stream_bytes;
+  if (mode == zfp_mode_fixed_rate)
+    stream_bytes = calc_device_mem2d(zfp_pad, decode_parameter);
+  /* for variable rate this is set in the calling function cuda_decompress */
+  else
+    stream_bytes = 0;
   size_t chunks = (zfp_blocks + (size_t)granularity - 1) / granularity;
   if (chunks % cuda_block_size != 0)
     chunks += (cuda_block_size - chunks % cuda_block_size);
